@@ -13,6 +13,16 @@ python3 -m unittest discover -s . -t ..   # 256 tests, from the repo root
 Stdlib only. `--plan` is the one exception and it runs path-planning in
 path-planning's own uv environment, not this one.
 
+Two portability notes, both consequences of the directory layout rather than of
+the sim. `types.py` mirrors `types.h` and so shadows the standard library's
+`types` module on any interpreter that has not already imported it by the time
+this directory reaches `sys.path` — if `run.py` dies importing `enum`, run it as
+`python3 -P run.py` (or set `PYTHONSAFEPATH=1`). And `unittest discover` has to
+accept a namespace package to name a directory with a hyphen in it: CPython 3.11
+through 3.14 do not, and answer *Start directory is not importable*. The root
+[`README.md`](../README.md#run-the-tests) carries an explicit loader that runs
+the same 256 tests without either problem.
+
 ## What is a port and what is not
 
 Every module named after a header is a line-by-line port of it, method names and
@@ -85,7 +95,13 @@ python3 run.py --fusion-fix   # 1.0 mm final error, path driven clean
 steady offset in `run.py task32 --fusion-fix`. Harmless for a relative
 wall-distance test, wrong as a pose.
 
-Neither is fixed in the firmware — that is not this directory's call.
+The mount offset is still unfixed everywhere. The `fusePose` defect has since
+been addressed in `firmware/micromouse/sensorFusion.h`, which now starts the
+three weight totals at `0.0f` and so drops the model's vote entirely rather than
+seeding it with dead reckoning — a stronger correction than `--fusion-fix`
+applies, in the same direction. `firmware-ds/lidar/sensorFusion.h` and
+`fusion.py` both still carry the original, so the sim's *default* run mirrors a
+header the robot no longer compiles; `--fusion-fix` is the closer comparison.
 
 ## Arguments
 

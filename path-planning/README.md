@@ -53,6 +53,10 @@ deliberately unrepresentable 270 deg arc that `segments.check` must reject.
 The demo defaults to `mazes/4.png`; the tests and benchmark pin `mazes/1.png` so
 their numbers stay comparable. All four photos in `mazes/` fit and map.
 
+Only `2.jpg` and `3.jpg` are tracked, though, so both of those defaults are
+missing from a fresh clone — pass an image explicitly, or restore the others.
+See [`mazes/README.md`](mazes/README.md) for what a usable photo needs.
+
 ## Posts
 
 A post is an obstacle, not just a landmark, and the two failure modes are
