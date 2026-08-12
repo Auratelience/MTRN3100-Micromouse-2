@@ -1,4 +1,6 @@
-# firmware-ds
+# Domain-Specific Firmware (firmware-ds)
+
+Used for testing specific robot parameters that do not require the full firmware.
 
 Bring-up sketches. `lidar/lidar.ino` is the only one: it initialises the I2C bus
 and the three VL6180Xs and prints their ranges to the serial monitor, forever.
