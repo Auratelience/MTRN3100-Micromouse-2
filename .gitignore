@@ -10,4 +10,5 @@ path-planning/.venv
 path-planning/*.h
 path-planning/uv.lock
 *.png
+*.jpg
 **/*.bak
