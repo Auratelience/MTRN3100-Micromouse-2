@@ -170,7 +170,3 @@ Real, verified, and worth knowing before trusting a run:
   Arduino toolchain requires headers to sit beside the sketch. Every header
   there except `sensorFusion.h` is currently byte-identical to `firmware/`;
   changes made in one do not reach the other.
-
----
-
-MTRN3100 micromouse project — Zimmy Levi (z5587840).
