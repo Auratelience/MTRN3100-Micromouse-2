@@ -1,0 +1,13 @@
+.claude/
+.zed/
+firmware/build
+firmware/.clangd
+firmware-sim/**/__*
+notes/*.pdf
+notes/*.jpeg
+path-planning/**/__*
+path-planning/.venv
+path-planning/*.h
+path-planning/uv.lock
+*.png
+**/*.bak
