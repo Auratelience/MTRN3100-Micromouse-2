@@ -15,7 +15,7 @@ map exported from the same photo.
                           line-by-line Python port of the sketch
 ```
 
-Five directories, each with its own README:
+Six directories, each with its own README:
 
 | directory | what it is | language |
 | --- | --- | --- |
@@ -23,7 +23,11 @@ Five directories, each with its own README:
 | [`firmware-ds/`](firmware-ds/) | a cut-down sketch that does nothing but print the three lidar ranges — hardware bring-up | C++17, Arduino |
 | [`firmware-sim/`](firmware-sim/) | `micromouse.ino`'s control loop with a simulated robot underneath it, and 256 tests over it | Python, stdlib only |
 | [`path-planning/`](path-planning/) | photo in, `maze_map.h` and `maze_path.h` out | Python + OpenCV/NumPy/SciPy, via `uv` |
+| [`scripts/`](scripts/) | every shell entry point: `build.sh` compiles a sketch, `build_maze.sh` runs the photo-to-headers pipeline | zsh |
 | [`notes/`](notes/) | CAD for the printed frame and the PCB | Bambu Studio, Rhino |
+
+Both scripts take `--help`, run from any directory, and derive their paths from
+the repo root rather than the caller's cwd.
 
 ## The robot
 
@@ -51,9 +55,18 @@ The maze is the full-size standard: 180 mm cells, 12 mm panels and posts.
 Open `firmware/micromouse/micromouse.ino` in the Arduino IDE, or:
 
 ```sh
-arduino-cli compile --fqbn arduino:renesas_uno:nanor4 firmware/micromouse
-arduino-cli upload  --fqbn arduino:renesas_uno:nanor4 -p /dev/ttyACM0 firmware/micromouse
+./compile.sh                        # build into firmware/build, ~15s (--help for options)
+./compile.sh --flash                # ...and upload it to the connected board, ~11s more
 ```
+
+`--flash` finds the port by asking `arduino-cli` which one has a board matching
+the FQBN on it, so nothing has to be hardcoded; pass `--port /dev/cu.usbmodemXXXX`
+to override it. The port is resolved *before* the build, so an unplugged board
+fails immediately instead of after a full compile.
+
+`./compile.sh` forwards to `./scripts/build.sh`, which takes the sketch to build
+as its first argument — `./scripts/build.sh lidar --flash` builds and flashes the
+bring-up sketch in [`firmware-ds/`](firmware-ds/) the same way.
 
 Libraries: Embedded Template Library, Adafruit SSD1306 (and Adafruit GFX),
 VL6180X. See [`firmware/README.md`](firmware/README.md) for which task block to
@@ -62,9 +75,8 @@ uncomment and what each one demonstrates.
 ### Plan a maze
 
 ```sh
-cd path-planning
-./build_maze.sh 2.jpg --from 1,1 --to 5,3   # overlay on screen, headers installed
-./build_maze.sh 2.jpg --no-install          # ...or leave the firmware alone
+./scripts/build_maze.sh 2.jpg --from 1,1 --to 5,3   # overlay on screen, headers installed
+./scripts/build_maze.sh 2.jpg --no-install          # ...or leave the firmware alone
 ```
 
 This is the only supported way to produce the pair, because the map and the path

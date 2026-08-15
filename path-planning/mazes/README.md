@@ -9,8 +9,8 @@ photos that are *not* in the repo — `maze_demo.py` to `mazes/4.png`, and
 image explicitly:
 
 ```sh
-./build_maze.sh 2.jpg --from 1,1 --to 5,3
-uv run python maze_demo.py mazes/3.jpg
+./scripts/build_maze.sh 2.jpg --from 1,1 --to 5,3   # from the repo root
+uv run python maze_demo.py mazes/3.jpg              # from path-planning/
 ```
 
 `selftest.py --image` additionally sweeps *every* file in this directory for its

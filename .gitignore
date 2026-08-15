@@ -2,6 +2,8 @@
 .zed/
 firmware/build
 firmware/.clangd
+firmware-ds/build
+firmware-ds/.clangd
 firmware-sim/**/__*
 notes/*.pdf
 notes/*.jpeg
@@ -12,3 +14,4 @@ path-planning/uv.lock
 *.png
 *.jpg
 **/*.bak
+*.stl

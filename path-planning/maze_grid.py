@@ -19,7 +19,7 @@ from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.optimize import minimize
 from scipy.spatial import KDTree
 
-PITCH_MM = 185.0
+PITCH_MM = 180.0
 POST_H_MM = 50.0  # only used to report camera height; not fitted against
 
 

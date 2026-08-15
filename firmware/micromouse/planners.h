@@ -216,20 +216,20 @@ class PosePlanner {
 class PSPlanner {
     public:
 
-    enum Direction : int { North = 0, West = 1, South = 2, East = -1 };
-    enum class Instruction { Forwards, Left, Right };
+    // Grid heading and cell pose live in types.h so MazeMapper can speak the
+    // same convention. Aliased here so existing PSPlanner::Direction call
+    // sites keep working; the enumerators (North, ...) are at namespace scope.
 
-    struct GridPose {
-        int x;
-        int y;
-        Direction direction;
-    };
+    enum class Instruction { Forwards, Left, Right };
 
     PSPlanner(float KPLinear, float KPAngular) : pp(KPLinear, KPAngular) {}
 
-    void setStart(GridPose g) {
-        instructions[pathLen] = g;
-        ++pathLen;
+    // Seeds the path with the pose the robot starts from. Every instruction is
+    // relative to the one before it, so this has to land before addInstruction.
+    bool setStart(GridPose g) {
+        pathLen = 0;
+        pathIdx = 0;
+        return appendGridPose(g);
     }
 
     bool addInstructions(etl::string<MAZE_INSTRUCTION_MAX_LEN> instructions) {
@@ -246,12 +246,13 @@ class PSPlanner {
     }
 
     bool addInstruction(Instruction i) {
+        if (pathLen == 0) return false;
         GridPose curr = instructions[pathLen - 1];
-        GridPose next;
+        GridPose next = curr;
         switch (i) {
-            case Instruction::Forwards: next = forwards(curr); break;
-            case Instruction::Right:    next = right(curr); break;
-            case Instruction::Left:     next = left(curr); break;
+            case Instruction::Forwards: next = stepForward(curr); break;
+            case Instruction::Right:    next = turnRight(curr); break;
+            case Instruction::Left:     next = turnLeft(curr); break;
         }
         return appendGridPose(next);
     }
@@ -280,40 +281,10 @@ class PSPlanner {
         return pp.update(pose, dt);
     }
 
-    static GridPose forwards(const GridPose& curr) {
-        switch (curr.direction) {
-            case North: return {curr.x + 1, curr.y, North};
-            case East:  return {curr.x, curr.y - 1, East};
-            case South: return {curr.x - 1, curr.y, South};
-            case West:  return {curr.x, curr.y + 1, West};
-            default:    return curr;
-        }
-    }
-
-    static GridPose left(const GridPose& curr) {
-        switch (curr.direction) {
-            case North: return {curr.x, curr.y, West};
-            case East:  return {curr.x, curr.y, North};
-            case South: return {curr.x, curr.y, East};
-            case West:  return {curr.x, curr.y, South};
-            default:    return curr;
-        }
-    }
-
-    static GridPose right(const GridPose& curr) {
-        switch (curr.direction) {
-            case North: return {curr.x, curr.y, East};
-            case East:  return {curr.x, curr.y, South};
-            case South: return {curr.x, curr.y, West};
-            case West:  return {curr.x, curr.y, North};
-            default:    return curr;
-        }
-    }
-
     private:
 
     bool appendGridPose(const GridPose& g) {
-        if (pathLen >= MAZE_INSTRUCTION_MAX_LEN) return false;
+        if (pathLen < 0 || static_cast<size_t>(pathLen) >= MAZE_INSTRUCTION_MAX_LEN) return false;
         instructions[pathLen] = g;
         ++pathLen;
         return true;
@@ -324,19 +295,7 @@ class PSPlanner {
     }
 
     static inline Pose gridToWorld(const GridPose& g) {
-        return {g.x * MAZE_CELL_SIZE, g.y * MAZE_CELL_SIZE, wrapAngle(g.direction * PI_TWO)};
-    }
-
-    static inline Direction thetaToDirection(float theta) {
-        int d = roundf(theta / PI_TWO);
-        switch (d) {
-            case 0:  return North;
-            case 1:  return West;
-            case 2:  return South;
-            case -1: return East;
-            case -2: return North; // -π
-            default: return North;
-        }
+        return {g.x * MAZE_CELL_SIZE, g.y * MAZE_CELL_SIZE, directionToTheta(g.direction)};
     }
 
     static inline GridPose worldToGrid(const Pose& p) {

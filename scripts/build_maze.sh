@@ -3,9 +3,9 @@
 # build_maze.sh -- one maze photo in, an overlay on screen and the firmware's
 # map header installed.
 #
-#     ./build_maze.sh 4                       # mazes/4.png, cell 1,1 -> 7,7
-#     ./build_maze.sh 2.jpg --from 1,1 --to 5,3
-#     ./build_maze.sh 1 --no-install          # overlay and headers here, firmware untouched
+#     ./scripts/build_maze.sh 4                  # mazes/4.png, cell 1,1 -> 7,7
+#     ./scripts/build_maze.sh 2.jpg --from 1,1 --to 5,3
+#     ./scripts/build_maze.sh 1 --no-install     # overlay and headers there, firmware untouched
 #
 # Runs maze_demo.py for the plan and the overlay, then export_map.py for
 # maze_map.h.  Both get the *same* --from/--theta0/--r, because the exported
@@ -13,22 +13,28 @@
 # them different ones and the robot localises against a map offset from the
 # path it is driving.  That coupling is the whole reason this wrapper exists.
 #
-# Every run leaves its own two headers here -- map_<stem>.h and path_<stem>.h --
-# and those are what get installed as maze_map.h / maze_path.h.  The installed
-# header is written via a temp file and the previous one is kept as
-# maze_map.h.bak -- it is not tracked by git, so a bad run would otherwise take
-# the only copy with it.
+# Every run leaves its own two headers in path-planning/ -- map_<stem>.h and
+# path_<stem>.h -- and those are what get installed as maze_map.h /
+# maze_path.h.  The installed header is written via a temp file and the previous
+# one is kept as maze_map.h.bak -- it is not tracked by git, so a bad run would
+# otherwise take the only copy with it.
 #
-# Both scripts run as 'uv run --directory <this dir> python ...', so they get
-# this directory's pyproject.toml and .venv (uv syncs it first if it is missing
+# Both scripts run as 'uv run --directory path-planning python ...', so they get
+# that directory's pyproject.toml and .venv (uv syncs it first if it is missing
 # or stale) no matter where you invoked the wrapper from.
 
 set -euo pipefail
 
-HERE=${0:A:h}
+# This script lives in scripts/ but every input and output belongs to
+# path-planning/: mazes/, the uv project, and the generated map_<stem>.h /
+# path_<stem>.h, which .gitignore covers as 'path-planning/*.h'.  Anchoring
+# those to the script's own directory would put generated headers in scripts/,
+# where that ignore rule does not reach.
+ROOT=${0:A:h:h}
 ME=${0:t}        # captured out here: inside a function $0 is the function name
-MAZES=$HERE/mazes
-FIRMWARE=$HERE/../firmware/micromouse   # HEADER/PATH_HEADER derived after parsing
+PLANNING=$ROOT/path-planning
+MAZES=$PLANNING/mazes
+FIRMWARE=$ROOT/firmware/micromouse   # HEADER/PATH_HEADER derived after parsing
 
 # planner defaults; --from 1,1 rather than export_map.py's 0,1 because the
 # deck chamfer leaves the corner cell unreachable at bounded curvature (README)
@@ -117,21 +123,21 @@ if ! IMAGE=$(resolve $IMAGE_ARG); then
     exit 1
 fi
 STEM=${${IMAGE:t}:r}
-: ${OUT:=$HERE/map_${STEM}_overlay.png}
-EMIT=$HERE/path_${STEM}.h
-MAP=$HERE/map_${STEM}.h
-# the scripts run with $HERE as their cwd, so a relative --out would land there
-# while the checks below looked for it next to the caller.  Pin it now.
+: ${OUT:=$PLANNING/map_${STEM}_overlay.png}
+EMIT=$PLANNING/path_${STEM}.h
+MAP=$PLANNING/map_${STEM}.h
+# the scripts run with $PLANNING as their cwd, so a relative --out would land
+# there while the checks below looked for it next to the caller.  Pin it now.
 OUT=${OUT:A}
 
 # --------------------------------------------------------------- interpreter
-# --directory instead of a bare cd: uv picks up this directory's
-# pyproject.toml/uv.lock/.venv and runs the script from here, while the wrapper
+# --directory instead of a bare cd: uv picks up path-planning's
+# pyproject.toml/uv.lock/.venv and runs the script from there, while the wrapper
 # keeps the caller's cwd so a relative --firmware still means what it says.
 command -v uv >/dev/null || die "uv not on PATH; the pipeline runs under 'uv run'"
-PY=(uv run --directory $HERE python)
-[[ -x $HERE/.venv/bin/python ]] ||
-    note "no .venv in ${HERE:t}/ yet -- uv will create and sync one, this first run is slow"
+PY=(uv run --directory $PLANNING python)
+[[ -x $PLANNING/.venv/bin/python ]] ||
+    note "no .venv in ${PLANNING:t}/ yet -- uv will create and sync one, this first run is slow"
 
 # ------------------------------------------------------------------- plan
 note "planning $IMAGE_ARG -> ${IMAGE:t}, cell $FROM -> $TO, r=${RADIUS}mm turn=${TURN}mm"
@@ -170,7 +176,7 @@ if (( OPEN )); then
 fi
 
 # --------------------------------------------------------------------- map
-# Exported before the --install gate and kept here as map_<stem>.h, next to the
+# Exported before the --install gate and kept in path-planning/ as map_<stem>.h, next to the
 # run's path_<stem>.h: the pair is what the firmware gets, and having both on
 # disk is how you diff this run against the last one or read the header without
 # digging it out of the firmware tree.  Still written via a temp file first --
@@ -196,7 +202,7 @@ note "map header ${MAP:t} ($COUNT obstacles)"
 # ------------------------------------------------------------------ install
 if (( ! INSTALL )); then
     note "--no-install: ${HEADER:t} and ${PATH_HEADER:t} untouched"
-    print -- "   the generated headers are ${MAP:t} and ${EMIT:t} in ${HERE:t}/"
+    print -- "   the generated headers are ${MAP:t} and ${EMIT:t} in ${PLANNING:t}/"
     (( PLANNED )) || exit 1
     exit 0
 fi

@@ -62,7 +62,7 @@ class TestPlannedScenario(unittest.TestCase):
 
     def setUp(self):
         if not (DEFAULT_MAP.exists() and DEFAULT_PATH.exists()):
-            self.skipTest("no generated headers -- run path-planning/build_maze.sh")
+            self.skipTest("no generated headers -- run scripts/build_maze.sh")
 
     def test_dead_reckoning_drives_the_whole_path(self):
         code, out = run("--no-localisation", "--max-seconds", "60")

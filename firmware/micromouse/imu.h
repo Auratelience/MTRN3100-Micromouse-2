@@ -169,10 +169,10 @@ class IMU {
         Wire.beginTransmission(address);
         Wire.write(reg);
         if (Wire.endTransmission(false) != 0) return 0;
-        Wire.requestFrom(address, (uint8_t)2);
+        Wire.requestFrom(address, static_cast<uint8_t>(2));
         if (Wire.available() < 2) return 0;
-        uint8_t hi = (uint8_t)Wire.read();
-        uint8_t lo = (uint8_t)Wire.read();
-        return (int16_t)((uint16_t)(hi << 8) | lo);
+        uint8_t hi = static_cast<uint8_t>(Wire.read());
+        uint8_t lo = static_cast<uint8_t>(Wire.read());
+        return static_cast<int16_t>(static_cast<uint16_t>(hi << 8) | lo);
     }
 };

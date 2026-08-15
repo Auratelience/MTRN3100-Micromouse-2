@@ -58,12 +58,12 @@ class Motor : public BaseMotor {
         reverse(reverse),
         encoderScale(encoderScale),
         encoderB_port(nullptr),
-        encoderB_mask(0) {}
+        encoderB_mask(0){}
 
     // Sets the pinMode for the two motor pins
     //
     // Side effects: modifies pinModes for pins at this.phase and .enable
-    void init() {
+    void init() override {
         pinMode(phase, OUTPUT);
         pinMode(enable, OUTPUT);
         pinMode(encoderA, INPUT_PULLUP);

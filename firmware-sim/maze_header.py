@@ -1,6 +1,6 @@
 """Reads the two generated headers back into the sim.
 
-``path-planning/build_maze.sh`` writes ``maze_map.h`` (a ``constexpr Map<N>``)
+``scripts/build_maze.sh`` writes ``maze_map.h`` (a ``constexpr Map<N>``)
 and ``maze_path.h`` (bare ``planner.appendSegment(...)`` statements) and installs
 both into ``firmware/micromouse/``. Parsing those files, rather than re-running
 the vision pipeline, is what lets the sim run *exactly* what is on the robot:

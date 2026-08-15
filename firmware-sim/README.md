@@ -52,7 +52,7 @@ artefacts; both say so at the top.
 
 ## The generated headers
 
-`path-planning/build_maze.sh` writes `maze_map.h` and `maze_path.h` and installs
+`scripts/build_maze.sh` writes `maze_map.h` and `maze_path.h` and installs
 them into `firmware/micromouse/`. `maze_header.py` parses both back, so the
 default run is *exactly* what the sketch compiles — same obstacles, same
 segments, same frame — with no OpenCV and no re-planning.

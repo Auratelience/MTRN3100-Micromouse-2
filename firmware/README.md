@@ -4,10 +4,17 @@ The robot. One Arduino sketch, `micromouse/micromouse.ino`, and the header-only
 libraries it is assembled from.
 
 ```sh
-arduino-cli compile --fqbn arduino:renesas_uno:nanor4 micromouse
-arduino-cli upload  --fqbn arduino:renesas_uno:nanor4 -p /dev/ttyACM0 micromouse
-./micromouse/update_libs.sh          # regenerate compile_commands.json for clangd
+../compile.sh                        # build into firmware/build, ~15s
+../compile.sh --flash                # ...and upload it to the connected board
+../compile.sh --db                   # regenerate compile_commands.json for clangd
+../compile.sh --help                 # full usage
 ```
+
+Build with `compile.sh` rather than calling `arduino-cli compile` directly: it
+empties `firmware/build` first, which is what keeps a build at ~15s instead of
+the 4+ minutes arduino-cli takes when it re-enters a populated build directory.
+`../compile.sh` is a forwarder for `../scripts/build.sh`, which takes the sketch
+to build as its first argument and defaults to this one.
 
 Third-party libraries: **Embedded Template Library** (`etl/`), **Adafruit
 SSD1306** and **Adafruit GFX**, **VL6180X** (Pololu). Everything else in
@@ -123,7 +130,7 @@ the observer needs the prior to be worth anything.
 
 ## Generated headers
 
-`maze_map.h` and `maze_path.h` are written by `path-planning/build_maze.sh`.
+`maze_map.h` and `maze_path.h` are written by `scripts/build_maze.sh`.
 **Do not edit them by hand.** Each carries a header comment recording the photo
 it came from, the lattice fit RMS, the obstacle counts and — critically — the
 start pose it was exported against:

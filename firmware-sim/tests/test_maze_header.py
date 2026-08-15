@@ -175,12 +175,12 @@ class TestInstalledHeaders(unittest.TestCase):
 
     def test_installed_map_loads(self):
         if not DEFAULT_MAP.exists():
-            self.skipTest("no maze_map.h installed -- run path-planning/build_maze.sh")
+            self.skipTest("no maze_map.h installed -- run scripts/build_maze.sh")
         self.assertGreater(len(load_map()), 0)
 
     def test_installed_path_loads_and_is_drivable(self):
         if not DEFAULT_PATH.exists():
-            self.skipTest("no maze_path.h installed -- run path-planning/build_maze.sh")
+            self.skipTest("no maze_path.h installed -- run scripts/build_maze.sh")
         segs = load_path()
         self.assertGreater(len(segs), 0)
         # segments.check() enforces this on the way out; if it does not hold on

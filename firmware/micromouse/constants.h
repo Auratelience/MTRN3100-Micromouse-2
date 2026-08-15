@@ -21,8 +21,8 @@ constexpr int ENC_CPR          = 700;
 // Per-wheel encoder calibration. Hand-measured angularDisplacement() for
 // exactly one wheel revolution (rad), 2026-07-17. Readings are scaled by
 // TWOPI / measured so a full revolution reads exactly 2π.
-constexpr float ENC_RAD_PER_REV_LEFT    = 6.09f;
-constexpr float ENC_RAD_PER_REV_RIGHT   = 6.24f;
+constexpr float ENC_RAD_PER_REV_LEFT    = 6.04f;
+constexpr float ENC_RAD_PER_REV_RIGHT   = 6.18f;
 constexpr float ENC_SCALE_LEFT          = TWO_PI / ENC_RAD_PER_REV_LEFT;
 constexpr float ENC_SCALE_RIGHT         = TWO_PI / ENC_RAD_PER_REV_RIGHT;
 constexpr float AXLE_LEN                = 92.5;
@@ -46,6 +46,15 @@ constexpr float STD_ANG_TOL                  = 0.05f;
 constexpr float SEGMENT_ADVANCE_THRESHOLD    = 0.995f;
 
 // MAZE
+// Cells per side, and so the size the mazeMapper<> alias instantiates
+// MazeMapper<> at, the same way TRIG_LUT_SIZE sizes trig. The class is
+// templated on it, so a test or a second instance can pick another size
+// without touching the header.
+//
+// Cost grows as N^2: at 9 the mapper holds ~430 bytes and its shortest-path
+// search borrows ~570 bytes of stack, at 16 that is ~1.3 kB and ~1.8 kB.
+constexpr uint8_t MAZE_SIZE = 9;
+
 // Physical size of one grid cell, mm. Full-size Micromouse uses 180mm,
 // half-size 168mm. Shared by the path factory and the instruction runner.
 constexpr float MAZE_CELL_SIZE = 180.0f;
@@ -60,6 +69,7 @@ constexpr float MAZE_POST_RADIUS    = MAZE_POST_SIZE * 0.7071068f;
 // Longest instruction string ("frfllflr...") the InstructionRunner accepts,
 // excluding the null terminator.
 constexpr size_t MAZE_INSTRUCTION_MAX_LEN = 256;
+
 
 // PID
 constexpr float PID_SATURATION_ABSOLUTE = 1000.0f;
@@ -92,7 +102,9 @@ constexpr uint8_t LIDAR_LEFT_ADDRESS         = 0x31;
 constexpr uint8_t LIDAR_RIGHT_ADDRESS        = 0x32;
 constexpr uint8_t LIDAR_TIMEOUT_MS           = 50;
 constexpr uint8_t LIDAR_CONTINUOUS_PERIOD_MS = 10; // minimum: 10 ms
-constexpr uint8_t LIDAR_BRINGUP_SETTLE_MS    = 10;
+constexpr uint8_t LIDAR_BRINGUP_SETTLE_MS = 10;
+
+constexpr uint16_t WALL_THRESHOLD_MM = 140;
 
 // Sensor mount poses relative to the robot centre: offset AND bearing, in mm
 // and rad, in the robot frame (x forward, y left, theta CCW). A sensor that is

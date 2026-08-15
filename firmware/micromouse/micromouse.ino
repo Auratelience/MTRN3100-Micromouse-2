@@ -55,22 +55,22 @@ WheelObserver wheel_obsv(leftMotor, rightMotor, kinematics);
 IMU imu;
 ImuObserver imu_obsv(imu);
 
-LidarSensor front(LIDAR_FRONT_ADDRESS, TOF_3_GPO);
-LidarSensor left(LIDAR_LEFT_ADDRESS, TOF_1_GPO);
-LidarSensor right(LIDAR_RIGHT_ADDRESS, TOF_2_GPO);
-LIDAR lidar(std::array<LidarSensor*, 3>{&front, &left, &right});
+LidarSensor frontLS(LIDAR_FRONT_ADDRESS, TOF_3_GPO);
+LidarSensor leftLS(LIDAR_LEFT_ADDRESS, TOF_1_GPO);
+LidarSensor rightLS(LIDAR_RIGHT_ADDRESS, TOF_2_GPO);
+LIDAR lidar(std::array<LidarSensor*, 3>{&frontLS, &leftLS, &rightLS});
 FrontLidarObserver fl_obsv(lidar);
 
 // TASK 3.1
-// const std::array<VelocitySource, 2> obs_v = {{
-//     {&wheel_obsv, ObserverVTrust{1.0f, 0.2f}},
-//     {&imu_obsv, FusionWeights::OmegaVTrust}
-// }};
-// SensorFusion sf(obs_v);
-// // KPHeading, KPLateral for the steering law. lateralError is in mm.
-// // KPLateral is rad/s per mm off the line and thus should remain small. Damping of the
-// // line-following loop is zeta = KPHeading / (2*sqrt(KPLateral*v))
-// MotionPlanner planner(10, 0.06f);
+const std::array<VelocitySource, 2> obs_v = {{
+    {&wheel_obsv, ObserverVTrust{1.0f, 0.2f}},
+    {&imu_obsv, FusionWeights::OmegaVTrust}
+}};
+SensorFusion sf(obs_v);
+// KPHeading, KPLateral for the steering law. lateralError is in mm.
+// KPLateral is rad/s per mm off the line and thus should remain small. Damping of the
+// line-following loop is zeta = KPHeading / (2*sqrt(KPLateral*v))
+MotionPlanner planner(10, 0.06f, MAXIMUM_FORWARD_VELOCITY / 2.0f);
 
 // TASK 3.2
 // const std::array<VelocitySource, 2> obs_v = {{
@@ -99,28 +99,23 @@ FrontLidarObserver fl_obsv(lidar);
 // SensorFusion sf(obs_v);
 // PSPlanner planner(10, 5);
 
-// 4.1 | 4.2
-const std::array<VelocitySource, 2> obs_v = {
-    {{&wheel_obsv, ObserverVTrust{1.0f, 0.2f}},
-     {&imu_obsv, FusionWeights::OmegaVTrust}}};
-
-#include "maze_map.h"
-LidarObserver lidar_obsv(lidar, MAZE_MAP);
-const std::array<PoseSource, 1> obs_p = {{{&lidar_obsv, {0.2, 0.2, 0.1}}}};
-
+// TASK 4.1 | 4.2
+// const std::array<VelocitySource, 2> obs_v = {
+//     {{&wheel_obsv, ObserverVTrust{1.0f, 0.2f}},
+//      {&imu_obsv, FusionWeights::OmegaVTrust}}};
+// #include "maze_map.h"
+// LidarObserver lidar_obsv(lidar, MAZE_MAP);
+// const std::array<PoseSource, 1> obs_p = {{{&lidar_obsv, {0.2, 0.2, 0.1}}}};
 // SensorFusion sf(obs_v, obs_p);
-SensorFusion sf(obs_v);
-
 // Pose fusedPose() {
 //     return sf.estimate.pose();
 // }
-
-MotionPlanner planner(10, 0.06f, 200.0f);
+// MotionPlanner planner(10, 0.06f, 200.0f);
 
 float dt = 0;
 
 // kd injects noise since loop speed means minimum α = dω/dt is 9 rad/s
-MotionController mc(leftMotor, rightMotor, kinematics, 20.0f, 3.0f, 0.0f);
+MotionController mc(leftMotor, rightMotor, kinematics, 10.0f, 3.0f, 0.0f);
 
 const std::array values = {
     // OLEDValue{"wov", []() { return wheel_obsv.estimate().v;}},
@@ -195,10 +190,12 @@ void setup() {
 
     // TASK 3.1
     // NOTE THAT X-AXIS IS FORWARDS: Y-AXIS IS LEFT!!!
-    // planner.appendSegment(Segment({0, 0}, {1000, 0}));
-    // planner.appendSegment(Segment({1000, 0}, {1000, -50}, 1.0f / 25.0f, Segment::Direction::Right));
-    // planner.appendSegment(Segment({1000, -50}, {0, 0}));
+    // planner.appendSegment(Segment({0, 0}, {170, 0}));
+    // planner.appendSegment(Segment({170, 0}, {180, -10}, 1.0f / 10.0f, Segment::Direction::Right));
+    // planner.appendSegment(Segment({180, -10}, {180, -180}));
 
+    planner.appendSegment(Segment({0, 0}, {180, 0}));
+    
     // TASK 3.2
     // planner.setTarget(200.0f);
 
@@ -206,16 +203,16 @@ void setup() {
     // planner.setTarget(PI/2.0f);
 
     // TASK 3.4
-    // planner.setStart({0, 0, PSPlanner::North});
+    // planner.setStart({0, 0, North});
     // planner.addInstructions("ffrfllfrlf");
 
     // TASK 4.1 | 4.2
-    #include "maze_path.h"
-    if (planner.s() != MotionPlanner::State::Run) {
-        Serial.println("\b\b\b [maze_path.h APPENDED NO SEGMENTS]");
-    } else {
-        Serial.println("\b\b\b [OKAY]");
-    }
+    // #include "maze_path.h"
+    // if (planner.s() != MotionPlanner::State::Run) {
+    //     Serial.println("\b\b\b [maze_path.h APPENDED NO SEGMENTS]");
+    // } else {
+    //     Serial.println("\b\b\b [OKAY]");
+    // }
 
     previous_time = micros();
 

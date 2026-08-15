@@ -9,6 +9,12 @@ python selftest.py --image                 # geometry, planner and CV checks
 python bench.py                            # success rate and cost over a set of trips
 ```
 
+These run under `uv` from this directory. To produce the firmware's header pair,
+do not call `maze_demo.py` and `export_map.py` yourself — use
+[`scripts/build_maze.sh`](../scripts/README.md), which gives both the same start
+pose. Its per-run outputs (`map_<stem>.h`, `path_<stem>.h`, the overlay) land
+here.
+
 ## Pipeline
 
 | module | what it owns |

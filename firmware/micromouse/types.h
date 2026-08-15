@@ -20,7 +20,7 @@ class Trig {
     public:
 
     // Only for v in [-1, 1]
-    const static float acos(float v) {
+    static float acos(float v) {
         if (v <= -1.0f) return PI;
         if (v >= 1.0f) return 0;
 
@@ -39,7 +39,7 @@ class Trig {
         return (neg ? PI - res : res);
     }
 
-    const static float atan2(float y, float x) {
+    static float atan2(float y, float x) {
         if (x == 0.0f) {
             if (y > 0.0f) return PI_TWO;
             if (y < 0.0f) return -PI_TWO;
@@ -79,7 +79,7 @@ class Trig {
     // the reflection identities sin(PI/2 + r) = sin(PI/2 - r) and
     // cos(x) = sin(x + PI/2). Contract: x in [0, 2PI). For arbitrary x use
     // xsin/xcos, which fmodf-wrap into range first.
-    const static float sin(float x) {
+    static float sin(float x) {
         size_t q = static_cast<size_t>(x * inv_half_pi);
         float r  = x - static_cast<float>(q) * PI_TWO;
         switch (q & 3u) { // & 3 absorbs x == 2PI and tiny overshoot
@@ -90,7 +90,7 @@ class Trig {
         }
     }
 
-    const static float cos(float x) {
+    static float cos(float x) {
         size_t q = static_cast<size_t>(x * inv_half_pi);
         float r  = x - static_cast<float>(q) * PI_TWO;
         switch (q & 3u) {
@@ -102,13 +102,13 @@ class Trig {
     }
 
     // Extended-range variants: accept any finite x, wrapping into [0, 2PI).
-    const static float xsin(float x) {
+    static float xsin(float x) {
         float r = fmodf(x, TWO_PI);
         if (r < 0.0f) r += TWO_PI;
         return sin(r);
     }
 
-    const static float xcos(float x) {
+    static float xcos(float x) {
         float r = fmodf(x, TWO_PI);
         if (r < 0.0f) r += TWO_PI;
         return cos(r);
@@ -358,6 +358,133 @@ Velocity operator*(const float a, const Velocity& b) {
 }
 
 // NOLINTEND(misc-definitions-in-headers)
+
+// GRID DIRECTIONS
+//
+// The one grid-heading convention for the firmware, shared by PSPlanner and
+// MazeMapper. Anything that talks about cells talks in these terms, so a route
+// produced by the mapper can be handed to the planner without a translation
+// layer in between -- two conventions is one too many, and the bug it hides is
+// a silent mirror-image path.
+//
+// Counter-clockwise, and numbered so that theta = d * PI_TWO is the world
+// heading directly. That identity is why East is -1 rather than 3: it keeps
+// the result inside [-PI, PI] without a wrap.
+//
+// Axes are the robot frame, x forward and y left, so North steps +x and West
+// steps +y. A cell's world centre is (x, y) * MAZE_CELL_SIZE.
+//
+// The helpers below switch on the enum rather than doing modular arithmetic on
+// it. That is deliberate: the values are not contiguous, so the (d + 1) & 3
+// trick that works on a plain 0..3 clockwise enum is wrong here.
+enum Direction : int { North = 0, West = 1, South = 2, East = -1 };
+
+struct GridPose {
+    int x;
+    int y;
+    Direction direction;
+};
+
+// A quarter turn CCW.
+inline Direction leftOf(Direction d) {
+    switch (d) {
+        case North: return West;
+        case West:  return South;
+        case South: return East;
+        case East:  return North;
+    }
+    return d;
+}
+
+// A quarter turn CW.
+inline Direction rightOf(Direction d) {
+    switch (d) {
+        case North: return East;
+        case East:  return South;
+        case South: return West;
+        case West:  return North;
+    }
+    return d;
+}
+
+inline Direction backOf(Direction d) {
+    switch (d) {
+        case North: return South;
+        case South: return North;
+        case East:  return West;
+        case West:  return East;
+    }
+    return d;
+}
+
+// One cell step along d, in grid units.
+inline int stepX(Direction d) {
+    switch (d) {
+        case North: return 1;
+        case South: return -1;
+        default:    return 0;
+    }
+}
+
+inline int stepY(Direction d) {
+    switch (d) {
+        case West: return 1;
+        case East: return -1;
+        default:   return 0;
+    }
+}
+
+// Dense 0..3 index, for callers packing a direction into an array slot or a
+// bitfield. Ordering is the CCW one, so this is (d + 4) % 4 written out.
+inline uint8_t directionIndex(Direction d) {
+    switch (d) {
+        case North: return 0;
+        case West:  return 1;
+        case South: return 2;
+        case East:  return 3;
+    }
+    return 0;
+}
+
+inline Direction directionFromIndex(uint8_t i) {
+    switch (i & 3) {
+        case 0:  return North;
+        case 1:  return West;
+        case 2:  return South;
+        default: return East;
+    }
+}
+
+inline GridPose stepForward(const GridPose& curr) {
+    return {curr.x + stepX(curr.direction), curr.y + stepY(curr.direction), curr.direction};
+}
+
+inline GridPose turnLeft(const GridPose& curr) {
+    return {curr.x, curr.y, leftOf(curr.direction)};
+}
+
+inline GridPose turnRight(const GridPose& curr) {
+    return {curr.x, curr.y, rightOf(curr.direction)};
+}
+
+inline float directionToTheta(Direction d) {
+    return wrapAngle(d * PI_TWO);
+}
+
+// Nearest grid direction to an arbitrary heading. Wrapping first bounds the
+// quotient to [-2, 2], so -PI and +PI both land on South rather than one of
+// them falling through to a default.
+inline Direction thetaToDirection(float theta) {
+    const int d = static_cast<int>(roundf(wrapAngle(theta) / PI_TWO));
+    switch (d) {
+        case 0:  return North;
+        case 1:  return West;
+        case 2:  return South;
+        case -2: return South;
+        case -1: return East;
+        default: return North;
+    }
+}
 
 class Segment {
     public:

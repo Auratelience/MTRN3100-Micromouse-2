@@ -4,10 +4,17 @@ Bring-up sketches. `lidar/lidar.ino` is the only one: it initialises the I2C bus
 and the three VL6180Xs and prints their ranges to the serial monitor, forever.
 
 ```sh
-arduino-cli compile --fqbn arduino:renesas_uno:nanor4 lidar
-arduino-cli upload  --fqbn arduino:renesas_uno:nanor4 -p /dev/ttyACM0 lidar
-arduino-cli monitor -p /dev/ttyACM0 -c baudrate=9600
+../scripts/build.sh lidar            # build into firmware-ds/build (--help for options)
+../scripts/build.sh lidar --flash    # ...and upload it to the connected board
+../scripts/build.sh lidar --db       # regenerate compile_commands.json for clangd
+arduino-cli monitor -p /dev/cu.usbmodem2101 -c baudrate=9600
 ```
+
+`lidar` is a target of the repo's one build script rather than a raw
+`arduino-cli compile`, for the same reason `micromouse` is: the script empties
+the build directory first, which is what keeps a build at seconds instead of the
+minutes arduino-cli takes when it re-enters a populated one. `firmware-ds/.clangd`
+pins the database it writes.
 
 ```
 F: 142
