@@ -91,8 +91,8 @@ The first run lets `uv` build the environment from `path-planning/pyproject.toml
 
 ```sh
 cd firmware-sim
-python3 -P run.py --fusion-fix --viz --open   # watch it drive the installed headers
-python3 -P run.py task34                      # any of the .ino's TASK blocks
+python3 -P run.py --viz --open                # watch it drive the installed headers
+python3 -P run.py task34                      # a retained TASK 3.x regression scenario
 ```
 
 [`firmware-sim/README.md`](firmware-sim/README.md) covers the arguments and what
@@ -162,15 +162,18 @@ built on.
 
 Real, verified, and worth knowing before trusting a run:
 
-* **`fusePose`'s weights differ across the three copies.** `firmware/micromouse/`
-  now starts `xWeightTotal`/`yWeightTotal`/`dthetaWeightTotal` at `0.0f`;
-  `firmware-ds/lidar/` still starts them at `1.0f`, and so does
-  `firmware-sim/fusion.py`, which mirrors the original deliberately. At `1.0f`
-  the model's vote is a vote for the origin rather than for dead reckoning, and
-  any pose source drags the estimate to (0, 0) — this is the defect
-  `firmware-sim`'s `--fusion-fix` flag exists to demonstrate, and the sim's
-  *default* run therefore no longer matches the sketch that is flashed today.
-  Run the sim with `--fusion-fix` for behaviour closer to the current firmware.
+* **`fusePose`'s weights differ between the two firmware copies.**
+  `firmware/micromouse/` and `firmware-sim/fusion.py` both start
+  `xWeightTotal`/`yWeightTotal`/`dthetaWeightTotal` at `0.0f`;
+  `firmware-ds/lidar/` still starts them at `1.0f`. At `1.0f` the model's vote is
+  a vote for the origin rather than for dead reckoning, so any pose source drags
+  the estimate to (0, 0) within milliseconds at loop rate. `firmware-ds` has no
+  pose source wired, so it does not trip over this today.
+* **The sim runs a pose correction gain of `0.2` where the sketch passes `0`.**
+  `micromouse.ino` builds `SensorFusion sf(obs_v, obs_p, 0)`, which disables the
+  lidar correction outright; `firmware-sim` treats that as a debug value and
+  keeps the `FusionWeights::PoseCorrectionGain` default so its localisation
+  scenarios still test something. See `firmware-sim/README.md`.
 * **`FrontLidarObserver` ignores its 57 mm mount offset** (`LIDAR_MOUNT_FRONT_X`),
   in all three copies. Fine as a relative wall-distance measurement, wrong as a
   pose. See `firmware-sim/README.md`.

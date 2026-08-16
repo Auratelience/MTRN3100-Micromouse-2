@@ -42,7 +42,7 @@ FROM=1,1
 TO=7,7
 THETA0=auto
 RADIUS=40
-TURN=30
+TURN=25
 ITERS=4000
 SEED=1
 MODE=dubins
@@ -162,6 +162,12 @@ if grep -q '^no path' $LOG; then
 fi
 if grep -q '^  PROBLEM' $LOG; then
     print -u2 -- "\e[33m!!\e[0m segments.check flagged the path above; do not paste it yet."
+fi
+# A planned path is collision free by construction, so this fires on the gap
+# between the planner's edge check and a 5 mm walk of the curve it accepted.
+# Warning only, like PROBLEM above: the exit status stays the plan's to decide.
+if grep -q '^collision' $LOG; then
+    print -u2 -- "\e[33m!!\e[0m the path clips something -- the red rings on the overlay are where."
 fi
 
 # ------------------------------------------------------------------ overlay
