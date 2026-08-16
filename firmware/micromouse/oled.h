@@ -14,66 +14,40 @@
 #include <etl/algorithm.h>
 
 #include "constants.h"
+#include "oledDisplay.h"
 
 struct OLEDValue {
     const char* label = nullptr;
     etl::delegate<float()> value;
 };
 
-class OLED {
+// A page of labelled scalars, one or two columns deep.
+//
+// Was OLED, and owned the panel. It now borrows an OLEDDisplay, because
+// OLEDMap and OLEDPath draw to the same panel and only one thing can own it.
+class OLEDValues {
     public:
 
     template <size_t N>
-    explicit OLED(
-        const std::array<OLEDValue, N>& values,
-        uint8_t width   = OLED_WIDTH,
-        uint8_t height  = OLED_HEIGHT,
-        uint8_t address = OLED_ADDRESS,
-        int8_t resetPin = OLED_NO_RESET_PIN
-    ) :
-        display(width, height, &Wire, resetPin),
-        values(clampSpan(etl::span<const OLEDValue>(values.data(), values.size()))),
-        width(width),
-        height(height),
-        address(address) {}
-
-    bool init() {
-        if (!display.begin(SSD1306_SWITCHCAPVCC, address)) {
-            initialized = false;
-            return false;
-        }
-
-        display.clearDisplay();
-        display.setTextSize(OLED_TEXT_SIZE);
-        display.setTextColor(SSD1306_WHITE);
-        display.cp437(true);
-        display.display();
-        initialized = true;
-        return true;
-    }
+    OLEDValues(OLEDDisplay& display, const std::array<OLEDValue, N>& values) :
+        display(display),
+        values(clampSpan(etl::span<const OLEDValue>(values.data(), values.size()))) {}
 
     void update() {
-        if (!initialized) return;
-        const unsigned long now = millis();
-        if (now - lastRefreshMs < OLED_REFRESH_MS) return;
-        lastRefreshMs = now;
+        if (!display.ready()) return;
+        if (!display.due()) return;
 
-        display.clearDisplay();
-        display.setTextSize(OLED_TEXT_SIZE);
-        display.setTextColor(SSD1306_WHITE);
+        Adafruit_SSD1306& g = display.gfx();
+        g.clearDisplay();
+        g.setTextSize(OLED_TEXT_SIZE);
+        g.setTextColor(SSD1306_WHITE);
 
         const uint8_t slots = maxVisibleValues();
         for (uint8_t i = 0; i < slots; ++i) {
             drawValue(i, values[i]);
         }
 
-        display.display();
-    }
-
-    void clear() {
-        if (!initialized) return;
-        display.clearDisplay();
-        display.display();
+        g.display();
     }
 
     template <size_t N>
@@ -83,20 +57,15 @@ class OLED {
 
     private:
 
-    Adafruit_SSD1306 display;
+    OLEDDisplay& display;
     etl::span<const OLEDValue> values;
-    uint8_t width;
-    uint8_t height;
-    uint8_t address;
-    bool initialized            = false;
-    unsigned long lastRefreshMs = 0;
 
     static etl::span<const OLEDValue> clampSpan(etl::span<const OLEDValue> s) {
         return s.first(etl::min<size_t>(s.size(), static_cast<size_t>(OLED_MAX_VALUES)));
     }
 
     uint8_t rowCount() const {
-        return height / OLED_TEXT_HEIGHT;
+        return display.height() / OLED_TEXT_HEIGHT;
     }
 
     uint8_t columnCount() const {
@@ -110,38 +79,40 @@ class OLED {
     }
 
     void drawValue(uint8_t index, const OLEDValue& item) {
+        Adafruit_SSD1306& g       = display.gfx();
         const uint8_t rows        = rowCount();
         const uint8_t column      = index / rows;
         const uint8_t row         = index % rows;
-        const uint8_t columnWidth = width / columnCount();
+        const uint8_t columnWidth = display.width() / columnCount();
         const uint8_t labelChars =
             (columnCount() == 1) ? OLED_ONE_COLUMN_LABEL_CHARS : OLED_TWO_COLUMN_LABEL_CHARS;
         const uint8_t x = column * columnWidth;
         const uint8_t y = row * OLED_TEXT_HEIGHT;
 
-        display.setCursor(x, y);
+        g.setCursor(x, y);
         printLabel(item.label, labelChars);
 
-        display.setCursor(x + ((labelChars + 1) * OLED_CHAR_WIDTH), y);
+        g.setCursor(x + ((labelChars + 1) * OLED_CHAR_WIDTH), y);
         if (!item.value.is_valid()) {
-            display.print(F("--"));
+            g.print(F("--"));
             return;
         }
 
-        display.print(
+        g.print(
             item.value(), columnCount() == 1 ? OLED_ONE_COLUMN_DECIMALS : OLED_TWO_COLUMN_DECIMALS
         );
     }
 
     void printLabel(const char* label, uint8_t maxChars) {
+        Adafruit_SSD1306& g = display.gfx();
         if (label == nullptr) {
-            display.print(F("?"));
+            g.print(F("?"));
             return;
         }
 
         for (uint8_t i = 0; label[i] != '\0' && i < maxChars; ++i) {
-            display.print(label[i]);
+            g.print(label[i]);
         }
-        display.print(F(":"));
+        g.print(F(":"));
     }
 };

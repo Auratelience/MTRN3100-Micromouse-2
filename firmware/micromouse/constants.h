@@ -42,6 +42,10 @@ constexpr float MAXIMUM_FORWARD_VELOCITY     = WHEEL_RADIUS * MAXIMUM_WHEEL_ANGU
 constexpr float MAXIMUM_ANGULAR_ACCELERATION = 20.0f; // rad/s²
 constexpr float STD_TOL                      = 1e-6f;
 constexpr float STD_DIST_TOL                 = 2.0f;
+// Position error at which PSPlanner stops translating and starts aligning
+// with the target heading.  The larger deadband prevents lidar/odometry
+// noise near a cell centre from delaying the turn handoff.
+constexpr float PS_POSITION_TOL              = 5.0f;
 constexpr float STD_ANG_TOL                  = 0.05f;
 constexpr float SEGMENT_ADVANCE_THRESHOLD    = 0.995f;
 
@@ -51,9 +55,25 @@ constexpr float SEGMENT_ADVANCE_THRESHOLD    = 0.995f;
 // templated on it, so a test or a second instance can pick another size
 // without touching the header.
 //
-// Cost grows as N^2: at 9 the mapper holds ~430 bytes and its shortest-path
-// search borrows ~570 bytes of stack, at 16 that is ~1.3 kB and ~1.8 kB.
-constexpr uint8_t MAZE_SIZE = 9;
+// Cost grows as N^2: at 9 the mapper holds ~580 bytes and its shortest-path
+// search borrows ~250 bytes of stack, at 16 that is ~1.8 kB and ~770 bytes.
+//
+// Nine, not ten, because maze_map.h describes a 10x10 post lattice, and ten
+// post lines bound nine cells. Cell centres in it run -180 mm to 1260 mm on
+// both axes.
+constexpr uint8_t MAZE_SIZE = 2;
+
+// The maze is not a full rectangle: every corner is chamfered, so the corner
+// cell and its two orthogonal neighbours are not there. This is the Manhattan
+// radius of that cut measured from the corner cell, so 0 would remove the
+// corner alone and 1 removes the three cells the physical maze is missing --
+// twelve in all.
+//
+// The sketch seals each cropped cell on all four sides as a prior before
+// exploration starts. MazeMapper has no concept of a cell that does not
+// exist, and does not need one: a cell walled on every side is one its search
+// can neither enter nor plan through.
+constexpr int8_t MAZE_CORNER_CROP = -1;
 
 // Physical size of one grid cell, mm. Full-size Micromouse uses 180mm,
 // half-size 168mm. Shared by the path factory and the instruction runner.
@@ -182,10 +202,16 @@ constexpr float LIDAR_OBSERVER_STEP_TOL_RAD = 0.0005f;
 // offset, the sensor's own ceiling and the largest step the solve can take.
 constexpr float LIDAR_OBSERVER_SEARCH_RADIUS_MM = 400.0f;
 
-// Ceiling on how many obstacles survive the broad phase. A beam-crossing
-// neighbourhood of a 180 mm lattice holds well under this; the cast falls back
+// Ceiling on how many obstacles survive the broad phase. The cast falls back
 // to the full map if it is ever exceeded, which costs time but not accuracy.
-constexpr size_t LIDAR_OBSERVER_MAX_CANDIDATES = 24;
+//
+// Measured, not guessed: a 400 mm search around a cell centre of maze_map.h
+// reaches at most 40 obstacles, and reaches more than 24 at 50 of its 81 cell
+// centres. At 24 the broad phase was therefore being abandoned most of the
+// time and every beam re-cast the whole map -- exactly the cost it exists to
+// avoid. MazeWallMap over the same maze, fully explored, peaks at 44. 48
+// clears both with headroom, and costs 96 bytes of RAM in the observer.
+constexpr size_t LIDAR_OBSERVER_MAX_CANDIDATES = 48;
 
 // OLED
 constexpr uint8_t OLED_WIDTH                  = 128;
@@ -201,6 +227,24 @@ constexpr uint8_t OLED_ONE_COLUMN_LABEL_CHARS = 7;
 constexpr uint8_t OLED_TWO_COLUMN_LABEL_CHARS = 3;
 constexpr uint8_t OLED_ONE_COLUMN_DECIMALS    = 2;
 constexpr uint8_t OLED_TWO_COLUMN_DECIMALS    = 1;
+
+// Map pane, shared by OLEDMap and OLEDPath. Square and as tall as the panel,
+// so a maze drawn into it is never letterboxed on the axis that matters.
+// OLEDMap divides the width by N for its cell pitch, so a square pane is also
+// what keeps a cell square.
+constexpr uint8_t OLED_MAP_PANE_X = 0;
+constexpr uint8_t OLED_MAP_PANE_W = 64;
+
+// Text pane. Starts two pixels clear of the map pane so a wall line drawn on
+// the pane's right edge does not touch the first character column. That leaves
+// 62 px, which is 10 characters at OLED_CHAR_WIDTH.
+constexpr uint8_t OLED_TEXT_PANE_X = 66;
+
+// Progress bar, drawn along the bottom of the text pane. Seven pixels is one
+// pixel of border either side of a five-pixel fill, which still reads as a
+// bar at this pixel density; the margin keeps it off the panel edge.
+constexpr uint8_t OLED_BAR_H      = 7;
+constexpr uint8_t OLED_BAR_MARGIN = 2;
 
 // SENSOR FUSION
 constexpr size_t SENSOR_FUSION_MAX_VELOCITY_OBSERVERS = 4;

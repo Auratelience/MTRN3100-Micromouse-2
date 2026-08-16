@@ -166,8 +166,10 @@ the entire reason `build_maze.sh` exists rather than two separate invocations.
 * **Encoders are calibrated per wheel.** `ENC_RAD_PER_REV_LEFT`/`RIGHT` were
   hand-measured; readings are scaled so one turn reads exactly 2π. Re-measure
   after any drivetrain change.
-* **Turn radius comes in bands.** 30 mm, or 75–178 mm, and nothing between —
-  the geometry is worked through in `path-planning/README.md`. The obvious
+* **Turn radius comes in bands.** Up to 26 mm, or 73–182 mm, and nothing
+  between — the geometry is worked through in `path-planning/README.md`, and the
+  bands are narrower than the axle-centred arithmetic suggests because the body
+  rides 25 mm ahead of the axle and swings wider through every turn. The obvious
   "slightly tighter than a cell" 70 mm cannot clear a pivot post.
 * **`Serial` in the loop costs milliseconds.** The prints left in `loop()` are
   commented out for that reason.

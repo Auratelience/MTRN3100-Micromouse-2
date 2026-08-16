@@ -455,6 +455,44 @@ inline Direction directionFromIndex(uint8_t i) {
     }
 }
 
+// Single letter for a heading, for a trace line or a display readout.
+inline char directionChar(Direction d) {
+    switch (d) {
+        case North: return 'N';
+        case West:  return 'W';
+        case South: return 'S';
+        case East:  return 'E';
+    }
+    return '?';
+}
+
+// Appends the turns that bring `from` onto `to` as 'l'/'r' characters, and
+// leaves `from` on the new heading.
+//
+// At most two, and a reversal comes out as two of the same hand rather than
+// stalling. Shared because both routes into the planner have to turn the same
+// way: MazeMapper::toInstructions rendering a whole path, and MazeRunner
+// stepping one cell during exploration. Two copies of this rule that disagreed
+// would put the robot on a different heading than the mapper thinks it is on.
+//
+// False on a full buffer rather than a quietly shortened turn sequence.
+// Templated on the string so types.h stays free of an etl/string include; any
+// type with full() and operator+=(char) fits.
+template <typename StringT>
+inline bool appendTurns(StringT& out, Direction& from, Direction to) {
+    while (from != to) {
+        if (out.full()) return false;
+        if (leftOf(from) == to) {
+            out += 'l';
+            from = leftOf(from);
+        } else {
+            out += 'r';
+            from = rightOf(from);
+        }
+    }
+    return true;
+}
+
 inline GridPose stepForward(const GridPose& curr) {
     return {curr.x + stepX(curr.direction), curr.y + stepY(curr.direction), curr.direction};
 }
@@ -921,6 +959,22 @@ class WallObstacle {
         return 0.5f * sqrtf(length * length + thickness * thickness);
     }
 
+    // The panel as a drawable segment: its two ends are
+    // centre +/- 0.5 * panelLength() * (cos panelAlpha(), sin panelAlpha()).
+    // OLEDPath needs both to place a panel on screen, and boundingRadius()
+    // alone cannot -- it is a circle, and a wall is a line.
+    //
+    // Named apart from the members rather than shadowing them: a class cannot
+    // hold a member and a member function of the same name, and renaming the
+    // members would obscure the derivation the maths above is written against.
+    constexpr float panelLength() const {
+        return length;
+    }
+
+    constexpr float panelAlpha() const {
+        return alpha;
+    }
+
     // Beam against the face the sensor is on. The two ends are left out: every
     // bond in the lattice terminates on a post, and a post's own circle covers
     // that corner more accurately than a square end cap would.
@@ -1032,6 +1086,13 @@ struct Map {
         return S;
     }
 
+    // Every slot in a fixed map holds an obstacle. Here so that a consumer can
+    // walk any map the same way -- MazeWallMap derives its obstacles from a
+    // bit per boundary, and most of its slots are empty.
+    static constexpr bool present(size_t) {
+        return true;
+    }
+
     constexpr const Obstacle& operator[](size_t i) const {
         return obstacles[i];
     }
@@ -1073,5 +1134,37 @@ struct Map {
         return n;
     }
 };
+
+// MazeMapper counts cells from the low corner of the maze and never mentions
+// millimetres -- deliberately, so its search stays unit-free. The pose
+// estimate reads (0, 0, 0) where the robot was placed. Those two numberings
+// differ by the mapper's configured start cell on each axis.
+//
+// Every place that has to speak both goes through here: the PSPlanner handoff,
+// the route overlay, and the wall map the lidar localises against. One
+// conversion, in one place, because the failure it prevents is silent -- an
+// offset of one cell per axis looks exactly like an ordinary tracking error.
+//
+// Coordinates are taken as float so a boundary or a lattice post, which sit on
+// half-cell coordinates, go through the same transform as a cell centre.
+
+// Linter hidden as this is a header-only library
+// NOLINTBEGIN(misc-definitions-in-headers)
+
+inline Vec2D cellToWorld(float cellX, float cellY, int8_t startX, int8_t startY) {
+    return Vec2D(
+        (cellX - static_cast<float>(startX)) * MAZE_CELL_SIZE,
+        (cellY - static_cast<float>(startY)) * MAZE_CELL_SIZE
+    );
+}
+
+// A mapper cell as the GridPose PSPlanner consumes. PSPlanner puts its own
+// cell (0, 0) at world (0, 0), so this is the same shift as above in cell
+// units.
+inline GridPose cellToGridPose(int cellX, int cellY, Direction d, int8_t startX, int8_t startY) {
+    return GridPose{cellX - startX, cellY - startY, d};
+}
+
+// NOLINTEND(misc-definitions-in-headers)
 
 #pragma GCC pop_options

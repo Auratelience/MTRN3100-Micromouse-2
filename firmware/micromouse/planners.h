@@ -162,6 +162,14 @@ class PosePlanner {
         return state == State::Done;
     }
 
+    // Abandons the current target. Needed by anything that re-seeds a
+    // sequence: a planner left mid-Seek still reports done() == false, and
+    // PSPlanner reads that as "keep driving", so the robot would chase the
+    // previous route's target before noticing it had been given a new one.
+    void reset() {
+        state = State::Done;
+    }
+
     Velocity update(const Pose& current, float dt) {
         switch (state) {
             case State::Seek:  return seek(current);
@@ -222,17 +230,25 @@ class PSPlanner {
 
     enum class Instruction { Forwards, Left, Right };
 
-    PSPlanner(float KPLinear, float KPAngular) : pp(KPLinear, KPAngular) {}
+    PSPlanner(float KPLinear, float KPAngular) : pp(KPLinear, KPAngular, PS_POSITION_TOL) {}
 
     // Seeds the path with the pose the robot starts from. Every instruction is
     // relative to the one before it, so this has to land before addInstruction.
     bool setStart(GridPose g) {
         pathLen = 0;
         pathIdx = 0;
+        // Drop whatever the inner planner was driving towards. Without this a
+        // sequence re-seeded before the previous one finished keeps the old
+        // target armed: update() only advances pathIdx when pp.done(), so the
+        // robot would drive to the abandoned pose first.
+        pp.reset();
         return appendGridPose(g);
     }
 
-    bool addInstructions(etl::string<MAZE_INSTRUCTION_MAX_LEN> instructions) {
+    // By reference: the string is MAZE_INSTRUCTION_MAX_LEN bytes, and taking
+    // it by value put a 256 byte copy on the stack for every call -- once per
+    // cell during exploration.
+    bool addInstructions(const etl::string<MAZE_INSTRUCTION_MAX_LEN>& instructions) {
         bool ok = true;
         for (const auto& c : instructions) {
             switch (c) {
@@ -279,6 +295,28 @@ class PSPlanner {
         }
 
         return pp.update(pose, dt);
+    }
+
+    // True once every pose in the sequence has been reached, and so the signal
+    // a caller waits on before treating the move as made -- MazeMapper's
+    // commitMove, for one, must fire exactly once per driven cell.
+    //
+    // update() only steps pathIdx past pathLen after PosePlanner reports done
+    // on the last pose, so this cannot go true early. It is also true before
+    // setStart, when the sequence is empty and there is nothing to drive.
+    bool done() const {
+        return pathIdx >= pathLen;
+    }
+
+    // Index of the pose currently being driven, and the number of poses in the
+    // sequence. setStart contributes one, so a route of k instructions has
+    // len() == k + 1.
+    int idx() const {
+        return pathIdx;
+    }
+
+    int len() const {
+        return pathLen;
     }
 
     private:

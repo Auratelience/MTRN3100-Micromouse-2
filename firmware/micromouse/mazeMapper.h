@@ -27,7 +27,8 @@
 //
 // The caller drives the loop:
 //
-//     mapper.begin(Cell{0, 0}, North, Cell{4, 4});
+//     MazeMapper<9> mapper(Cell{0, 0}, North, Cell{4, 4});
+//     mapper.begin();
 //     mapper.markWall(Cell{0, 0}, South);                  // priors, if any
 //     while (!mapper.doneExploring()) {
 //         mapper.observe(frontWall, leftWall, rightWall);  // at the current cell
@@ -38,14 +39,6 @@
 //     }
 //     if (mapper.faulted()) { /* map is suspect, do not race on it */ }
 //     mapper.buildShortestPathToGoal();
-//
-// planMove only reads and commitMove only writes, and that split is load
-// bearing. The backtrack stack is correct only if every planned move is
-// executed exactly once; folding both halves into one call meant a move that
-// was planned but not driven -- a stalled motor, an aborted run, a caller that
-// re-planned -- desynced the stack, and a desynced stack hands a
-// non-adjacent cell pair to the wall-clearing code, which then erases real
-// walls from the map. Now a mismatched or missing commit is rejected outright.
 //
 // observe() only ever sees the three sides the sensors face, so the side the
 // robot came in through is never sensed. That is fine everywhere except the
@@ -70,6 +63,10 @@ class MazeMapper {
         int8_t y;
     };
 
+    MazeMapper(Cell startCell, Direction startHeading, Cell goalCell) :
+        start(startCell), goal(goalCell), current(startCell),
+        facing(startHeading), startFacing(startHeading) {}
+
     // Longest route the maze can hold, and so the size of every path buffer.
     static constexpr uint16_t MAX_CELLS = static_cast<uint16_t>(N) * static_cast<uint16_t>(N);
 
@@ -77,20 +74,17 @@ class MazeMapper {
     // Returns false if either cell is outside the maze, leaving the mapper
     // unstarted rather than half-configured -- observe() writes at the current
     // cell, so an out-of-range start would corrupt memory on the first call.
-    bool begin(Cell startCell, Direction startHeading, Cell goalCell) {
+    bool begin() {
         started = false;
-        if (!inside(startCell) || !inside(goalCell)) return false;
+        if (!inside(start) || !inside(goal)) return false;
 
-        start        = startCell;
-        goal         = goalCell;
-        current      = startCell;
-        facing       = startHeading;
-        startFacing  = startHeading;
+        current      = start;
         stackTop     = 0;
         finalPathLen = 0;
         movePending  = false;
         explored     = false;
         broken       = false;
+        seenCells    = 0;
 
         for (uint8_t x = 0; x < N; ++x) {
             for (uint8_t y = 0; y < N; ++y) {
@@ -123,6 +117,11 @@ class MazeMapper {
     bool doneExploring() const { return explored; }
     bool atGoal() const { return sameCell(current, goal); }
 
+    // Cells observe() has stood in. Kept as a running total rather than left
+    // to the caller: the display and the progress meter both want it every
+    // frame, and each was walking all N * N cells to get it.
+    uint16_t visitedCount() const { return seenCells; }
+
     // True once the mapper caught its own state going inconsistent -- a
     // desynced backtrack stack, or a commit it could not apply. Exploration
     // stops when this trips, which also raises doneExploring(), so the two have
@@ -136,6 +135,7 @@ class MazeMapper {
     // its neighbour too.
     void observe(bool frontWall, bool leftWall, bool rightWall) {
         if (!started) return;
+        if (!visitedCells[current.x][current.y]) ++seenCells;
         visitedCells[current.x][current.y] = true;
         if (frontWall) addWall(current, facing);
         if (leftWall) addWall(current, leftOf(facing));
@@ -151,6 +151,33 @@ class MazeMapper {
         if (isOpen(c, d)) return false;
         addWall(c, d);
         return true;
+    }
+
+    // Walls a cell in on all four sides: the way to say "this cell is not
+    // there". A maze whose corners are chamfered, or whose outline is not a
+    // rectangle, is seeded with these before the first observe().
+    //
+    // There is no separate notion of a nonexistent cell, and none is needed.
+    // planMove skips a neighbour behind a wall and buildShortestPath will not
+    // expand through one, so a cell walled on every side can be neither
+    // entered nor planned through. False if any side was refused -- a boundary the robot
+    // has already driven through outranks a prior, and a cell that is only
+    // partly sealed is one the search can still walk into.
+    bool sealCell(const Cell& c) {
+        bool ok = markWall(c, North);
+        ok      = markWall(c, South) && ok;
+        ok      = markWall(c, West) && ok;
+        ok      = markWall(c, East) && ok;
+        return ok;
+    }
+
+    // Walled on every side and never entered, so unreachable: a cell sealed by
+    // sealCell, or one the discovered walls have closed off. Visited cells are
+    // excluded because they cannot be sealed -- the boundary the robot came in
+    // through was cleared on the way.
+    bool sealedCell(const Cell& c) const {
+        return !visited(c) && hasWall(c, North) && hasWall(c, South) && hasWall(c, West) &&
+               hasWall(c, East);
     }
 
     // Picks the next move: an unexplored neighbour if there is one, otherwise
@@ -236,9 +263,7 @@ class MazeMapper {
     // finished sweep unwinds the backtrack stack all the way back, leaving the
     // robot on the start cell. Use buildShortestPath if the run stopped early
     // -- on atGoal(), say -- or to route home from where the robot stands.
-    bool buildShortestPathToGoal() { return buildPath(start, goal); }
-
-    bool buildShortestPath(const Cell& from, const Cell& to) { return buildPath(from, to); }
+    bool buildShortestPathToGoal() { return buildShortestPath(start, goal); }
 
     uint16_t shortestPathLength() const { return finalPathLen; }
 
@@ -268,19 +293,7 @@ class MazeMapper {
         for (uint16_t i = 1; i < finalPathLen; ++i) {
             Direction step;
             if (!directionTo(finalPath[i - 1], finalPath[i], step)) return false;
-
-            // At most two turns: a reversal comes out as two of the same hand
-            // rather than stalling.
-            while (d != step) {
-                if (out.full()) return false;
-                if (leftOf(d) == step) {
-                    out += 'l';
-                    d = leftOf(d);
-                } else {
-                    out += 'r';
-                    d = rightOf(d);
-                }
-            }
+            if (!appendTurns(out, d, step)) return false;
 
             if (out.full()) return false;
             out += 'f';
@@ -332,7 +345,7 @@ class MazeMapper {
     // anything the sensors say later: without this a single false positive --
     // the front sensor picking up a post, or the mouse sitting skew in a cell
     // it has been through before -- re-walls an opening the robot has already
-    // used, and buildPath then plans the long way round it or fails outright.
+    // used, and buildShortestPath then plans the long way round it or fails.
     bool isOpen(const Cell& c, Direction d) const {
         if (!inside(c)) return false;
         return (openBoundaries[c.x][c.y] & wallMask(d)) != 0;
@@ -371,14 +384,16 @@ class MazeMapper {
         return true;
     }
 
-    // Breadth-first, so the first time the goal is dequeued it is on a
-    // shortest route. Expansion is limited to visited cells: an unvisited cell
-    // has no wall data, and treating its four unknown sides as open would plan
-    // straight through them.
+    public:
+
+    // Shortest route between any two explored cells. Breadth-first, so the
+    // first time the target is dequeued it is on a shortest route. Expansion is
+    // limited to visited cells: an unvisited cell has no wall data, and
+    // treating its four unknown sides as open would plan straight through them.
     //
     // Predecessors are stored as a direction index per cell rather than a Cell
     // per cell, which is a byte instead of two and doubles as the seen flag.
-    bool buildPath(const Cell& from, const Cell& to) {
+    bool buildShortestPath(const Cell& from, const Cell& to) {
         finalPathLen = 0;
         if (!started || !inside(from) || !inside(to)) return false;
         if (!visited(from) || !visited(to)) return false;
@@ -438,11 +453,13 @@ class MazeMapper {
         return true;
     }
 
+    private:
+
     uint8_t walls[N][N];
     uint8_t openBoundaries[N][N];
     bool visitedCells[N][N];
 
-    Cell start{0, 0};
+    Cell start;
     Cell goal{0, 0};
     Cell current{0, 0};
     Direction facing      = North;
@@ -457,6 +474,7 @@ class MazeMapper {
     Cell finalPath[MAX_CELLS];
     uint16_t finalPathLen = 0;
 
+    uint16_t seenCells    = 0;
     Direction pendingMove = North;
     bool pendingBacktrack = false;
     bool movePending      = false;
