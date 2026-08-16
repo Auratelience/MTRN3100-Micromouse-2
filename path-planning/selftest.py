@@ -76,6 +76,45 @@ def test_dubins():
             worst_gap = max(worst_gap, float(np.linalg.norm(np.diff(P, axis=0), axis=1).max()))
     check("sample() spacing stays under ds", worst_gap <= 5.0 + 1e-9, f"{worst_gap:.3f} mm")
 
+    # The body disc rides ahead of the axle, so around a turn it sweeps a larger
+    # circle and covers more arc than the reference point does.  curve_valid's
+    # proof is about the *body's* curve, so that is what has to honour ds.
+    off = 25.0
+    worst_gap, worst_pt = 0.0, 0.0
+    for _ in range(200):
+        q0, q1 = rand_pose(rng), rand_pose(rng)
+        L, w, p = db.shortest(q0, q1, rho)
+        Q = db.sample_poses(q0, w, p, rho, 5.0, offset=off)
+        B = Q[:, :2] + off * np.stack([np.cos(Q[:, 2]), np.sin(Q[:, 2])], 1)
+        if len(B) > 1:
+            worst_gap = max(
+                worst_gap, float(np.linalg.norm(np.diff(B, axis=0), axis=1).max())
+            )
+        # offset=0 must be the old sampler exactly, or every caller that still
+        # wants points has silently changed
+        A = db.sample_poses(q0, w, p, rho, 5.0)
+        worst_pt = max(worst_pt, float(np.abs(A[:, :2] - db.sample(q0, w, p, rho, 5.0)).max()))
+    check(
+        "sample_poses() spacing stays under ds for the offset body",
+        worst_gap <= 5.0 + 1e-9,
+        f"{worst_gap:.3f} mm",
+    )
+    check("sample_poses() at offset 0 reproduces sample()", worst_pt < 1e-12, f"{worst_pt:.1e}")
+
+    # the heading carried by each sample really is the curve's tangent there
+    worst_th = 0.0
+    for _ in range(50):
+        q0, q1 = rand_pose(rng), rand_pose(rng)
+        L, w, p = db.shortest(q0, q1, rho)
+        Q = db.sample_poses(q0, w, p, rho, 0.05)
+        d = np.diff(Q[:, :2], axis=0)
+        keep = np.linalg.norm(d, axis=1) > 1e-9
+        chord = np.arctan2(d[keep, 1], d[keep, 0])
+        a, b = Q[:-1, 2][keep], Q[1:, 2][keep]
+        mid = a + 0.5 * db.wrap_pi(b - a)  # the chord bisects the swept angle
+        worst_th = max(worst_th, float(np.abs(db.wrap_pi(chord - mid)).max()))
+    check("sample_poses() headings follow the tangent", worst_th < 2e-3, f"{worst_th:.1e} rad")
+
     # a truncated word is the prefix it claims to be
     err = 0.0
     for _ in range(200):
@@ -212,17 +251,52 @@ def test_world():
 
     # curve_valid is conservative: it must never pass a curve that clips
     rng = np.random.default_rng(3)
-    leaks = 0
-    for _ in range(300):
-        q0 = np.array([rng.uniform(40, 500), rng.uniform(40, 140), rng.uniform(-np.pi, np.pi)])
-        q1 = np.array([rng.uniform(40, 500), rng.uniform(40, 140), rng.uniform(-np.pi, np.pi)])
-        L, w, par = db.shortest(q0, q1, 30.0)
-        if not free.curve_valid(db.sample(q0, w, par, 30.0, 4.0), 4.0):
-            continue
-        fine = db.sample(q0, w, par, 30.0, 0.2)  # 20x denser ground truth
-        if free.clearance(fine).min() <= 0.0:
-            leaks += 1
-    check("curve_valid never passes a clipping curve", leaks == 0, f"{leaks} leaks")
+
+    def leak_count(w_, off):
+        leaks = 0
+        for _ in range(300):
+            q0 = np.array([rng.uniform(40, 500), rng.uniform(40, 140), rng.uniform(-np.pi, np.pi)])
+            q1 = np.array([rng.uniform(40, 500), rng.uniform(40, 140), rng.uniform(-np.pi, np.pi)])
+            L, word, par = db.shortest(q0, q1, 30.0)
+            if not w_.curve_valid(db.sample_poses(q0, word, par, 30.0, 4.0, offset=off), 4.0):
+                continue
+            fine = db.sample_poses(q0, word, par, 30.0, 0.2, offset=off)  # 20x denser
+            if w_.pose_clearance(fine).min() <= 0.0:
+                leaks += 1
+        return leaks
+
+    n0 = leak_count(_box_world(axle_offset_mm=0.0), 0.0)
+    check("curve_valid never passes a clipping curve", n0 == 0, f"{n0} leaks")
+
+    # -- an axle that is not at the centre of the robot ---------------------
+    off = rs.AXLE_OFFSET_MM
+    n1 = leak_count(_box_world(axle_offset_mm=off), off)
+    check("curve_valid never passes a curve the offset body clips", n1 == 0, f"{n1} leaks")
+
+    posted = _box_world(posts_mm=[[270.0, 90.0]], axle_offset_mm=off)
+    axle = [205.0, 90.0]  # 65 mm short of a post that reaches 53.5 mm
+    check(
+        "an axle clear of a post can still put the body inside it",
+        bool(posted.is_free(axle)[0]) and not bool(posted.pose_free([*axle, 0.0])[0]),
+    )
+    check(
+        "the same axle facing away from the post is free",
+        bool(posted.pose_free([*axle, np.pi])[0]),
+    )
+    check(
+        "body_xy puts the disc offset ahead along the heading",
+        float(np.linalg.norm(posted.body_xy([0.0, 0.0, np.pi / 2.0])[0] - [0.0, off]))
+        < 1e-9,
+    )
+    check(
+        "a zero offset leaves the body on the axle",
+        float(
+            np.abs(
+                _box_world(axle_offset_mm=0.0).body_xy([12.0, 34.0, 1.0])[0] - [12.0, 34.0]
+            ).max()
+        )
+        < 1e-12,
+    )
 
 
 # -------------------------------------------------------------------- planner
@@ -236,8 +310,11 @@ def test_planner():
     if out["path"] is None:
         return
     segs = out["segments"]
-    check("the path is collision free", float(world.clearance(sg.polyline(segs, 1.0)).min()) > 0.0,
-          f"min clearance {world.clearance(sg.polyline(segs, 1.0)).min():.1f} mm")
+    # the body's curve, not the axle's: with an offset those are different
+    # curves, and it is the body that has to fit
+    body = world.body_xy(sg.pose_polyline(segs, 1.0))
+    check("the path is collision free", float(world.clearance(body).min()) > 0.0,
+          f"min clearance {world.clearance(body).min():.1f} mm")
     check("the path is firmware-representable", not sg.check(segs))
     check(
         "the path starts at the start pose and ends at the goal",
@@ -268,6 +345,89 @@ def test_planner():
         "best_heading finds the open side",
         abs(db.wrap_pi(rs.best_heading(world, [60.0, 90.0]) - 0.0)) < 1e-9
         or abs(db.wrap_pi(rs.best_heading(world, [60.0, 90.0]) - np.pi)) < 1e-9,
+    )
+    th = rs.best_heading(world, [60.0, 90.0])
+    check(
+        "best_heading leaves the body somewhere it fits",
+        bool(world.pose_free([60.0, 90.0, th])[0]),
+    )
+
+    # A start whose axle is clear but whose body is not is a start the robot
+    # cannot be put in, and saying so beats searching from it and finding
+    # nothing.  205 mm is 65 mm short of the post; the body reaches to 230.
+    posted = _box_world(posts_mm=[[270.0, 90.0]], axle_offset_mm=rs.AXLE_OFFSET_MM)
+    try:
+        rs.plan_dubins(posted, (205.0, 90.0, 0.0), (60.0, 90.0, None), rho=30.0, max_iter=10)
+        rejected = False
+    except ValueError:
+        rejected = True
+    check("a start pose the body cannot hold is rejected", rejected)
+
+
+# ------------------------------------------------------------------ collision
+def test_collision():
+    """The overlay's red marks: samples of the drawn path that sit inside an
+    obstacle.  A planned path has none, so what this really pins is that the
+    marks are honest -- sampled along the curve rather than at its waypoints,
+    and never claimed anywhere the world says there is room."""
+    import maze_demo as md
+
+    print("collision")
+    # the corridor is free for y in (51, 129): wall_t/2 + r + pad = 51 mm
+    world = _box_world()
+
+    def line(y):
+        x = np.linspace(60.0, 480.0, 50)
+        return np.stack([x, np.full_like(x, y)], 1)
+
+    clean, _, n = md.collision_points(world, line(90.0))
+    check("a centreline path has no collisions", len(clean) == 0)
+    check(
+        "the corridor is sampled at the reported spacing",
+        abs(n - round(420.0 / md.COLLISION_DS_MM) - 1) <= 1,
+        f"{n} samples over 420 mm at {md.COLLISION_DS_MM:.0f} mm",
+    )
+
+    hits, slack, _ = md.collision_points(world, line(20.0))
+    check(
+        "a path inside the wall clearance collides", len(hits) > 0, f"{len(hits)} samples"
+    )
+    check(
+        "every reported sample really is in collision",
+        len(hits) > 0
+        and bool((slack <= 0.0).all())
+        and bool(np.allclose(slack, world.clearance(hits))),
+    )
+
+    # a path that only dips out of the corridor: the marks must land on the dip
+    P = line(90.0)
+    P[20:30, 1] = 20.0
+    hits, _, _ = md.collision_points(world, P)
+    check(
+        "marks land only where the path leaves the free corridor",
+        len(hits) > 0 and bool((hits[:, 1] < 51.0).all()),
+    )
+
+    # the whole point of resampling: endpoints free, middle not.  Checking the
+    # waypoints alone would call this path clean.
+    blocked = _box_world(posts_mm=[[270.0, 90.0]])
+    ends = np.array([[60.0, 90.0], [480.0, 90.0]])
+    check(
+        "a post between two free waypoints is still caught",
+        bool(blocked.is_free(ends).all()) and len(md.collision_points(blocked, ends)[0]) > 0,
+    )
+
+    # Given headings, the marks belong under the body, which is where the robot
+    # actually is.  This run stops 16 mm short of the post on the axle and 9 mm
+    # inside it on the body, so the two readings disagree.
+    offw = _box_world(posts_mm=[[270.0, 90.0]], axle_offset_mm=rs.AXLE_OFFSET_MM)
+    axle = np.column_stack([np.linspace(60.0, 200.0, 60), np.full(60, 90.0)])
+    check("the axle's own track reads clean", len(md.collision_points(offw, axle)[0]) == 0)
+    hits, _, _ = md.collision_points(offw, np.column_stack([axle, np.zeros(60)]))
+    check(
+        "with headings the body's collision is reported",
+        len(hits) > 0 and bool((hits[:, 0] > 216.0).all()),
+        f"{len(hits)} samples",
     )
 
 
@@ -364,6 +524,7 @@ if __name__ == "__main__":
     test_segments()
     test_world()
     test_planner()
+    test_collision()
     if "--image" in sys.argv:
         test_image()
     print()

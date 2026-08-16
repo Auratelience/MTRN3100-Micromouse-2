@@ -19,15 +19,39 @@ final shortcut pass.  ``plan_dubins`` is the same search in SE(2) with Dubins
 steering, so every edge is already a straight-and-arc sequence the firmware can
 drive; see ``dubins.py`` and ``segments.py``.
 
+Where the robot is
+------------------
+A differential drive turns about its axle, so the axle is what a Dubins curve
+tracks -- but ``AXLE_OFFSET_MM`` says the axle is 25 mm behind the middle of
+this chassis, and it is the chassis that collides.  The two are different
+curves: on a 30 mm arc the body orbits at ``hypot(30, 25) = 39 mm``, nearly a
+third wider, so a turn cleared for the axle can still put a corner into a post.
+
+``MazeWorld``'s point queries (``clearance``, ``is_free``, ``motion_valid``)
+take the *body centre*, and its pose queries (``pose_clearance``, ``pose_free``,
+``curve_valid``) take an axle pose and work out the body themselves.
+``plan_dubins`` searches over axle poses and so uses the latter throughout; the
+heading-free ``plan`` has no axle to speak of, and plans the body centre
+directly.
+
 Turn radius vs. corner posts
 ----------------------------
 The Dubins planner's counterpart of the same trap.  A 90 deg turn tangent to two
 cell centrelines has its centre at (90+R, 90+R) from the corner cell, so the
-pivot post sits ``sqrt(2)|90-R|`` from that centre and the arc misses it by
-``|R - sqrt(2)|90-R||``.  For a 40 mm robot that has to clear 53.5 mm, so the
-feasible radii are two bands, R <= 30 mm and 75 <= R <= 178 mm, not a range:
-R = 70 mm, the obvious "a bit tighter than a cell" choice, sits in the gap and
-cannot turn a corner at all.
+pivot post sits ``sqrt(2)|90-R|`` from that centre.  What has to miss the post
+is the *body*, which orbits that same centre at ``hypot(R, AXLE_OFFSET_MM)``
+rather than at R, so the miss is ``|hypot(R, off) - sqrt(2)|90-R||`` and it has
+to clear 53.5 mm.  The feasible radii are two bands, not a range: R <= 26 mm and
+73 <= R <= 182 mm.  R = 70 mm, the obvious "a bit tighter than a cell" choice,
+sits in the gap and cannot turn a corner at all.
+
+The offset costs the lower band its top few mm -- at off = 0 it reached 30.6 mm
+-- which puts the 30 mm default just outside it, at a 45.8 mm miss.  That is a
+statement about the textbook corner and not about the planner: a centreline-
+tangent turn is one arc out of a continuum, and the search is free to turn from
+anywhere across the corridor, which is exactly why 30 mm was chosen over 90.  It
+does mean the tightest corners now cost the sampler more tries, and that
+``--turn-radius 25`` buys the margin back for 316 mm/s instead of 346.
 
 Both bands are drivable; only the small one is searchable.  A 90 mm turn is the
 textbook micromouse arc -- centred exactly on the post, tangent to both
@@ -59,6 +83,14 @@ import segments as sg
 # firmware/micromouse/constants.h, in mm and mm/s^2
 MAX_V_MM_S = 15.7 * 25.0  # WHEEL_RADIUS * MAXIMUM_WHEEL_ANGULAR_VELOCITY
 MAX_A_LAT_MM_S2 = 4000.0  # MAXIMUM_LATERAL_ACCELERATION
+
+# How far the axle sits behind the middle of the robot, in mm.  A differential
+# drive turns about its axle, so the axle is the point the Dubins curve tracks
+# and the point odometry reports -- but it is not the point the chassis is
+# centred on, and the chassis is what hits things.  The body therefore rides
+# this far *ahead* of the planned pose, and swings wider than it through every
+# turn.  Set it to 0 for a robot whose axle is central.
+AXLE_OFFSET_MM = 25.0
 
 
 # ------------------------------------------------------------------ geometry
@@ -129,6 +161,14 @@ class MazeWorld:
     extra_clearance_mm : padding on top, to absorb the map's own error.  The
         lattice fit is good to ~4 mm rms and the cylinder radius to ~10 mm, so
         this is the knob to turn if a path grazes too close for comfort.
+    axle_offset_mm : how far the axle sits behind the centre of that disc.  See
+        ``AXLE_OFFSET_MM``.  The point queries below take the *body centre*; the
+        pose queries take an axle pose and work out where the body is.
+
+    The distinction only exists because of the offset -- at 0 the two coincide,
+    and taking the conservative alternative instead, a disc of
+    ``robot_radius_mm + axle_offset_mm`` about the axle, costs 25 mm of
+    clearance everywhere on a deck whose tightest doorways already have under 2.
     """
 
     def __init__(
@@ -142,6 +182,7 @@ class MazeWorld:
         use_conservative_radius=True,
         posts_mm=(),
         post_radius_mm=8.5,
+        axle_offset_mm=AXLE_OFFSET_MM,
     ):
         S = np.asarray(wall_segments_mm, float).reshape(-1, 2, 2)
         self.A, self.B = S[:, 0], S[:, 1]
@@ -149,6 +190,7 @@ class MazeWorld:
         self._half = 0.5 * np.linalg.norm(self.B - self.A, axis=1)
 
         self.robot_r = float(robot_radius_mm)
+        self.axle_off = float(axle_offset_mm)
         self.pad = float(extra_clearance_mm)
         self.wall_clear = 0.5 * wall_t_mm + self.robot_r + self.pad
         self.circ_clear = self.robot_r + self.pad
@@ -205,7 +247,12 @@ class MazeWorld:
 
     # -- point queries -----------------------------------------------------
     def clearance(self, P):
-        """Signed slack in mm: >0 is free, and says how much room is left."""
+        """Signed slack in mm for the body centred at ``P``: >0 is free, and
+        says how much room is left.
+
+        ``P`` is where the *body* is, not where the axle is.  Anything holding
+        an axle pose wants ``pose_clearance``.
+        """
         P = np.atleast_2d(np.asarray(P, float))
         d = np.full(len(P), np.inf)
         if len(self.A):
@@ -227,6 +274,21 @@ class MazeWorld:
 
     def is_free(self, P):
         return self.clearance(P) > 0.0
+
+    # -- pose queries ------------------------------------------------------
+    def body_xy(self, Q):
+        """Axle poses ``(n,3)`` -> the body centres ``(n,2)`` they put the robot at."""
+        Q = np.atleast_2d(np.asarray(Q, float))
+        return Q[:, :2] + self.axle_off * np.stack(
+            [np.cos(Q[:, 2]), np.sin(Q[:, 2])], 1
+        )
+
+    def pose_clearance(self, Q):
+        """``clearance`` for a robot whose *axle* is at pose ``Q``."""
+        return self.clearance(self.body_xy(Q))
+
+    def pose_free(self, Q):
+        return self.pose_clearance(Q) > 0.0
 
     # -- edge queries ------------------------------------------------------
     def motion_valid(self, p, q):
@@ -256,13 +318,20 @@ class MazeWorld:
         return True
 
     # -- curve queries -----------------------------------------------------
-    def curve_valid(self, P, ds):
-        """Is a curve free, given points spaced at most ``ds`` of *arc length*?
+    def curve_valid(self, Q, ds):
+        """Is a curve free, given axle poses whose *bodies* are spaced at most
+        ``ds`` of arc length apart?
 
-        Every point of the curve is within ds/2 of arc length from some sample,
-        and Euclidean distance never exceeds arc length, so requiring
+        Every point of the body's curve is within ds/2 of arc length from some
+        sample, and Euclidean distance never exceeds arc length, so requiring
         ``clearance > ds/2`` at the samples proves the whole curve free.  That
         makes this conservative rather than approximate.
+
+        The spacing premise is the caller's to keep, and with an off-centre axle
+        it is about the body rather than the axle -- ``dubins.sample_poses``
+        takes the offset for exactly that reason.  Handing this axle samples at
+        ``ds`` while the body swings wider would quietly weaken the proof to
+        nothing in particular.
 
         The price is a ds/2 slice of usable clearance, and it is not academic:
         this deck's chamfered corners leave some doorways under 2 mm of slack
@@ -270,9 +339,10 @@ class MazeWorld:
         ds doubles the samples, and the test is vectorised over all of them, so
         that trade is cheap.
         """
-        P = np.atleast_2d(np.asarray(P, float))
-        if not len(P):
+        Q = np.atleast_2d(np.asarray(Q, float))
+        if not len(Q):
             return False
+        P = self.body_xy(Q)
         # Most candidate edges are blocked, and a blocked one usually fails at
         # many samples at once, so a quarter-density pass rejects the common case
         # for a quarter of the work.  Only rejection is decided here -- a hit on
@@ -448,7 +518,8 @@ def _snap(v, pitch, offset):
 
 
 def _edge_valid(q0, word, params, rho, ds, world):
-    return world.curve_valid(db.sample(q0, word, params, rho, ds), ds)
+    Q = db.sample_poses(q0, word, params, rho, ds, offset=world.axle_off)
+    return world.curve_valid(Q, ds)
 
 
 def best_heading(world, xy, reach_mm=400.0, ds_mm=5.0):
@@ -457,15 +528,21 @@ def best_heading(world, xy, reach_mm=400.0, ds_mm=5.0):
     A forward-only car cannot start facing a panel 40 mm away, and in a maze
     the start cell often has exactly one open side, so guessing wrong looks
     identical to "no path exists".  Ties break toward +x.
+
+    ``xy`` is an axle position, so the run is measured over where the body goes:
+    it starts a body offset ahead and is clamped at zero, which is the case that
+    matters -- a heading the robot cannot even be placed in must not win on the
+    strength of a negative run.
     """
     xy = np.asarray(xy, float).reshape(2)
     best, best_run = 0.0, -1.0
     for th in (0.0, np.pi / 2.0, np.pi, -np.pi / 2.0):
         u = np.array([np.cos(th), np.sin(th)])
-        P = xy + np.outer(np.arange(0.0, reach_mm + ds_mm, ds_mm), u)
+        travel = np.arange(0.0, reach_mm + ds_mm, ds_mm)
+        P = xy + np.outer(travel + world.axle_off, u)
         c = world.clearance(P)
         blocked = np.flatnonzero(c <= 0.0)
-        run = reach_mm if not len(blocked) else ds_mm * (blocked[0] - 1)
+        run = reach_mm if not len(blocked) else max(0.0, ds_mm * (blocked[0] - 1))
         if run > best_run:
             best, best_run = th, run
     return best
@@ -540,12 +617,22 @@ def plan_dubins(
         [np.full(len(headings), goal_xy[0]), np.full(len(headings), goal_xy[1]), headings]
     )
 
-    for name, p in (("start", start[:2]), ("goal", goal_xy)):
-        if not world.is_free(p)[0]:
-            raise ValueError(
-                f"{name} {np.round(p, 1)} is in collision "
-                f"(clearance {world.clearance(p)[0]:.1f} mm)"
-            )
+    # Both ends are checked as poses, because with an off-centre axle a position
+    # is not on its own free or blocked -- the body swings with the heading.  A
+    # free goal heading is free if *any* of the headings the connect step may
+    # use fits, since that is what the search actually has to work with.
+    if not world.pose_free(start)[0]:
+        raise ValueError(
+            f"start {np.round(start[:2], 1)} facing "
+            f"{np.degrees(start[2]):.0f} deg is in collision "
+            f"(clearance {world.pose_clearance(start)[0]:.1f} mm)"
+        )
+    goal_slack = world.pose_clearance(goal_poses)
+    if goal_slack.max() <= 0.0:
+        raise ValueError(
+            f"goal {np.round(goal_xy, 1)} is in collision at every allowed "
+            f"heading (best clearance {goal_slack.max():.1f} mm)"
+        )
 
     V = np.empty((max_iter + 2, 3))
     V[0] = start
@@ -601,7 +688,7 @@ def plan_dubins(
                 s = min(step_mm * frac, L[i_near])
                 p_cut = db.truncate(word, par[i_near], rho, s)
                 cand = db.endpoint(V[i_near], word, p_cut, rho)
-                if not world.is_free(cand[:2])[0]:
+                if not world.pose_free(cand)[0]:
                     continue
                 if not _edge_valid(V[i_near], word, p_cut, rho, ds_mm, world):
                     continue
@@ -676,8 +763,8 @@ def plan_dubins(
         ds_mm=ds_mm,
     )
     if best_goal < 0:
-        return dict(out, path=None, poses=None, segments=None, cost=np.inf,
-                    raw_cost=np.inf)
+        return dict(out, path=None, path_poses=None, poses=None, segments=None,
+                    cost=np.inf, raw_cost=np.inf)
 
     chain = []
     k = best_goal
@@ -700,12 +787,14 @@ def plan_dubins(
         segs += sg.from_dubins(q, word, par, rho)
     segs = sg.clean(segs)
     poses = np.array([e[0] for e in edges] + [db.endpoint(*edges[-1], rho)])
+    dense = sg.pose_polyline(segs, 5.0)
     return dict(
         out,
         poses=poses,
         edges=edges,
         segments=segs,
-        path=sg.polyline(segs, 5.0),
+        path=dense[:, :2],
+        path_poses=dense,
         cost=sg.length(segs),
         raw_cost=float(best_cost),
     )

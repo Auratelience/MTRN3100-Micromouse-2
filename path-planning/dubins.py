@@ -216,32 +216,46 @@ def endpoint(q0, word, params, rho):
     return q
 
 
-def sample(q0, word, params, rho, ds):
-    """Points along the path at spacing <= ``ds``, endpoints included.
+def sample_poses(q0, word, params, rho, ds, offset=0.0):
+    """Poses ``(x, y, theta)`` along the path, endpoints included.
 
     Used for collision checking, so the guarantee that matters is the spacing
-    ceiling: no two consecutive returned points are further apart than ``ds``.
+    ceiling.  ``offset`` says the caller is really checking a point that rides
+    that many mm ahead of the reference point -- an off-centre robot body -- and
+    the ceiling is then honoured for *that* point, which is the one being
+    checked.  It is the tighter requirement: around a turn the offset point
+    orbits the same centre at ``hypot(rho, offset)``, so it covers that much
+    more arc for the same swept angle, and sampling at ``ds/rho`` would leave it
+    up to 30% further apart than asked at rho=30, offset=25.
     """
-    pts = [np.asarray(q0, float)[:2]]
+    out = [np.asarray(q0, float)[:3]]
     for mode, qa, qb, value, centre in primitives(q0, word, params, rho):
         if mode == "S":
             if value <= 1e-9:
                 continue
             n = max(1, int(np.ceil(value / ds)))
             t = np.arange(1, n + 1)[:, None] / n
-            pts.append(qa[:2] + t * (qb[:2] - qa[:2]))
+            P = qa[:2] + t * (qb[:2] - qa[:2])
+            out.append(np.column_stack([P, np.full(n, qa[2])]))
         else:
             if value <= 1e-9:
                 continue
             # arc-length spacing, not chord spacing: the collision checker's
             # soundness argument is stated in arc length (MazeWorld.curve_valid)
-            dphi = ds / rho
+            dphi = ds / np.hypot(rho, offset)
             n = max(1, int(np.ceil(value / max(dphi, 1e-9))))
             s = 1.0 if mode == "L" else -1.0
             a0 = np.arctan2(qa[1] - centre[1], qa[0] - centre[0])
             a = a0 + s * value * np.arange(1, n + 1) / n
-            pts.append(centre + rho * np.stack([np.cos(a), np.sin(a)], 1))
-    return np.concatenate([np.atleast_2d(p) for p in pts], 0)
+            P = centre + rho * np.stack([np.cos(a), np.sin(a)], 1)
+            # the tangent leads the radius by a quarter turn, in the turn's sense
+            out.append(np.column_stack([P, a + s * 0.5 * np.pi]))
+    return np.concatenate([np.atleast_2d(p) for p in out], 0)
+
+
+def sample(q0, word, params, rho, ds):
+    """Points along the path at spacing <= ``ds``, endpoints included."""
+    return sample_poses(q0, word, params, rho, ds)[:, :2]
 
 
 def truncate(word, params, rho, s):

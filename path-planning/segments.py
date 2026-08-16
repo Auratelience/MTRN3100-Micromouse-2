@@ -128,15 +128,25 @@ class Segment:
 
     def sample(self, ds=5.0):
         """Points along the segment at spacing <= ``ds``, endpoints included."""
+        return self.sample_poses(ds)[:, :2]
+
+    def sample_poses(self, ds=5.0):
+        """``(x, y, theta)`` along the segment at spacing <= ``ds``.
+
+        The heading is what tells a collision check where an off-centre body
+        sits, so a bare point is not enough to place the robot.
+        """
+        n = max(1, int(np.ceil(self.length / ds)))
         if not self.is_arc:
-            n = max(1, int(np.ceil(self.length / ds)))
             t = np.arange(n + 1)[:, None] / n
-            return self.start + t * (self.end - self.start)
+            P = self.start + t * (self.end - self.start)
+            return np.column_stack([P, np.full(n + 1, self.start_theta)])
         c = self.centre if self.centre is not None else self.firmware_centre()
         a0 = np.arctan2(*(self.start - c)[::-1])
-        n = max(1, int(np.ceil(self.length / ds)))
         a = a0 + self.sign * self.sweep * np.arange(n + 1) / n
-        return c + self.radius * np.stack([np.cos(a), np.sin(a)], 1)
+        P = c + self.radius * np.stack([np.cos(a), np.sin(a)], 1)
+        # the same quarter-turn lead _theta applies, evaluated all at once
+        return np.column_stack([P, a + self.sign * np.pi / 2.0])
 
 
 # --------------------------------------------------------------- construction
@@ -323,13 +333,19 @@ def clean(segs, min_len=0.5, max_kink=0.02):
 
 
 def polyline(segs, ds=5.0):
-    """Whole path as points, for drawing and clearance checks."""
+    """Whole path as points, for drawing."""
+    return pose_polyline(segs, ds)[:, :2]
+
+
+def pose_polyline(segs, ds=5.0):
+    """Whole path as ``(x, y, theta)``, for clearance checks -- an off-centre
+    body needs the heading to be placed at all."""
     if not segs:
-        return np.zeros((0, 2))
-    P = [segs[0].sample(ds)]
+        return np.zeros((0, 3))
+    Q = [segs[0].sample_poses(ds)]
     for s in segs[1:]:
-        P.append(s.sample(ds)[1:])
-    return np.concatenate(P, 0)
+        Q.append(s.sample_poses(ds)[1:])
+    return np.concatenate(Q, 0)
 
 
 def length(segs):

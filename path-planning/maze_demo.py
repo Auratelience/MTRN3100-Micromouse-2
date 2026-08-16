@@ -50,6 +50,57 @@ def ascii_maze(walls, posts=None):
     return "\n".join(out)
 
 
+# The clearance report and the overlay's red marks read the same samples, so
+# the "clearance N mm minimum" line and the picture can never disagree.
+COLLISION_DS_MM = 5.0
+
+
+def checkable(out):
+    """What to hand a collision check: poses where the planner produced them,
+    so the offset body is placed properly, and bare points otherwise."""
+    poses = out.get("path_poses")
+    return out["path"] if poses is None else poses
+
+
+def collision_points(world, path, ds_mm=COLLISION_DS_MM):
+    """Points of the robot's body that sit inside an obstacle.
+
+    ``path`` is either body-centre points ``(n,2)`` or axle poses ``(n,3)``;
+    given poses, the offset body is what gets checked and what gets marked,
+    which is the honest thing to draw -- the robot is not where its axle is.
+
+    Returns the colliding samples, their (negative) slack in mm, and how many
+    samples were taken.  Sampled along the curve rather than at its waypoints:
+    ``curve_valid`` accepts an edge at its own step, so between two samples that
+    check out is the one place a planned path can still clip something.
+    """
+    Q = np.atleast_2d(np.asarray(path, float))
+    P = rs.resample(world.body_xy(Q) if Q.shape[1] == 3 else Q, ds_mm)
+    slack = world.clearance(P)
+    bad = slack <= 0.0
+    return P[bad], slack[bad], len(P)
+
+
+def collision_marks(vis, W, pts):
+    """A filled red disc inside a white ring, at every colliding sample.
+
+    The ring is not decoration: walls draw in the same red, so a bare dot on a
+    panel is invisible exactly where it matters most.
+    """
+    # the usual case, and cv2.perspectiveTransform returns None rather than an
+    # empty array for no points, so mm_to_px cannot be handed one
+    if not len(pts):
+        return
+    # every ring first, then every core: at 5 mm spacing consecutive marks
+    # overlap, and interleaving the two lets each ring bury its neighbour's
+    # core until a run of collisions reads as a white smear instead of red
+    P = np.int32(W.mm_to_px(pts, "floor"))
+    for c in P:
+        cv2.circle(vis, c, 6, (255, 255, 255), -1, cv2.LINE_AA)
+    for c in P:
+        cv2.circle(vis, c, 4, (0, 0, 255), -1, cv2.LINE_AA)
+
+
 def start_arrow(vis, W, start_mm, theta0, length_mm=140.0):
     """The pose the plan was built from, drawn where the robot has to be put.
 
@@ -68,7 +119,7 @@ def start_arrow(vis, W, start_mm, theta0, length_mm=140.0):
     cv2.circle(vis, np.int32(a), 4, (255, 0, 255), -1, cv2.LINE_AA)
 
 
-def overlay(img, M, out=None, pose=None):
+def overlay(img, M, out=None, pose=None, world=None):
     W = M["frame"]
     vis = img.copy()
     cv2.polylines(
@@ -118,6 +169,10 @@ def overlay(img, M, out=None, pose=None):
                 cv2.circle(vis, np.int32(j), 2, (0, 140, 255), -1, cv2.LINE_AA)
             cv2.circle(vis, np.int32(p[0]), 5, (255, 0, 255), -1)
             cv2.circle(vis, np.int32(p[-1]), 5, (255, 60, 0), -1)
+            # over the path, so a clip is never hidden under the line that
+            # caused it
+            if world is not None:
+                collision_marks(vis, W, collision_points(world, checkable(out))[0])
     # last, so it stays readable over the tree and over a path that leaves the
     # start along the same heading -- and it is drawn whether or not there is a
     # path, since a wrong theta0 is a common reason there is not one
@@ -221,7 +276,10 @@ def main():
         if a.theta0 == "auto"
         else np.radians(float(a.theta0))
     )
-    print(f"free width {world.free_width_mm:.0f} mm for r={a.r:.0f} mm")
+    print(
+        f"free width {world.free_width_mm:.0f} mm for r={a.r:.0f} mm, "
+        f"axle {world.axle_off:.0f} mm behind centre"
+    )
     print(
         f"start      {np.round(start)} mm heading {np.degrees(theta0):.0f} deg"
         f"{' (auto)' if a.theta0 == 'auto' else ''}"
@@ -243,13 +301,21 @@ def main():
     if out["path"] is None:
         print(f"no path {np.round(start)} -> {np.round(goal)} in {out['iters']} it")
     else:
-        cl = world.clearance(rs.resample(out["path"], 5.0))
+        Q = np.atleast_2d(checkable(out))
+        body = world.body_xy(Q) if Q.shape[1] == 3 else Q
+        cl = world.clearance(rs.resample(body, 5.0))
         print(
             f"path       {len(out['path'])} waypoints, {out['cost']:.0f} mm "
             f"({out['raw_cost']:.0f} mm before shortcutting), "
             f"{len(out['nodes'])} nodes, step {out['step_mm']:.0f} mm"
         )
         print(f"clearance  {cl.min():.1f} mm minimum along the path")
+        hits, slack, n = collision_points(world, checkable(out))
+        if len(hits):
+            print(
+                f"collision  {len(hits)} of {n} samples inside an obstacle, "
+                f"worst {slack.min():.1f} mm -- ringed red on the overlay"
+            )
 
     segs = out.get("segments")
     if segs:
@@ -288,7 +354,9 @@ def main():
                 )
             print("wrote", a.js)
 
-    cv2.imwrite(a.out, overlay(img, M, out, pose=(start[0], start[1], theta0)))
+    cv2.imwrite(
+        a.out, overlay(img, M, out, pose=(start[0], start[1], theta0), world=world)
+    )
     print("wrote", a.out)
 
 

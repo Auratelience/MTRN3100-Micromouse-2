@@ -105,10 +105,11 @@ reported as a 15 mm cylinder.
 ## Two numbers worth knowing before you tune
 
 **Turn radius comes in bands, not a range.** A 90 deg turn tangent to two cell
-centrelines misses the pivot post by `|R - sqrt(2)|90-R||`. For a 40 mm robot
-that has to clear 53.5 mm, leaving `R <= 30 mm` or `75 <= R <= 178 mm`. The
-obvious "a bit tighter than a cell" choice of 70 mm sits in the gap and cannot
-turn a corner at all.
+centrelines misses the pivot post by `|hypot(R, 25) - sqrt(2)|90-R||` — the
+`hypot` because the body orbits the turn centre 25 mm off the axle, which is
+what the arc has to fit. For a 40 mm robot that has to clear 53.5 mm, leaving
+`R <= 26 mm` or `73 <= R <= 182 mm`. The obvious "a bit tighter than a cell"
+choice of 70 mm sits in the gap and cannot turn a corner at all.
 
 Of the two bands only the small one is searchable. A 90 mm arc is the textbook
 micromouse turn — centred exactly on the post — but it is clear only if entered
@@ -118,12 +119,45 @@ connected. The 30 mm default turns comfortably from anywhere across the corridor
 and costs speed, not safety: `sqrt(a r)` caps a 30 mm arc at 346 mm/s against the
 robot's 392 mm/s ceiling.
 
+The default now sits just outside the lower band, which reached 30.6 mm before
+the axle offset was accounted for. That bounds the textbook corner, not the
+planner — a centreline-tangent turn is one arc out of a continuum and the search
+turns from wherever it likes, which is the whole reason 30 mm beat 90 mm. It does
+cost the tightest corners some tries; `--turn-radius 25` buys the margin back at
+316 mm/s.
+
 **The corner cells are not reachable.** The deck's chamfer leaves cell (0,1) an
 escape slot about 1 mm wide for a 40 mm robot. The straight-line planner threads
 it — that is what its 1.2 mm minimum clearance was — but no bounded-curvature
 path fits, at any radius, even with the padding set to zero. That is geometry,
 not search: if you need to start there, shrink `--r` or `extra_clearance_mm`
 and check the reported clearance yourself.
+
+## The axle is not in the middle
+
+A differential drive turns about its axle, so the axle is the point a Dubins
+curve tracks and the point odometry reports — but on this chassis it sits 25 mm
+behind the middle, and it is the middle that hits things. `AXLE_OFFSET_MM` in
+`rrt_star.py` is that number; set it to 0 for a centred robot.
+
+The two are genuinely different curves. The body rides 25 mm ahead of every
+planned pose, and around a turn it orbits the same centre at `hypot(R, 25)` —
+39 mm on a 30 mm arc, nearly a third wider — so an arc that clears for the axle
+can still put a corner into a post. The alternative, a single disc of
+`40 + 25 = 65 mm` about the axle, is sound but costs 25 mm of clearance
+everywhere on a deck whose tightest doorways already have under 2 mm.
+
+So `MazeWorld` splits its queries by what they are handed:
+
+| query | takes |
+| --- | --- |
+| `clearance`, `is_free`, `motion_valid` | the **body centre** |
+| `pose_clearance`, `pose_free`, `curve_valid` | an **axle pose**, and works the body out |
+
+`plan_dubins` searches over axle poses and uses the pose queries throughout;
+`plan` has no heading to speak of and plans the body centre directly. The
+overlay's red marks and the `clearance` line are read off the body too, so what
+the picture shows is where the robot actually is.
 
 ## Collision checking
 
@@ -134,3 +168,9 @@ every point of the curve is within `ds/2` of arc length from a sample, and
 Euclidean distance never exceeds arc length. `ds` defaults to 2.5 mm, small
 enough not to wall off the tight doorways this deck has. `selftest.py` checks
 20x-denser ground truth against it and expects zero leaks.
+
+That proof is about the body's curve, so it is the body that has to be sampled
+at `ds` — and it covers `hypot(R, 25) / R` more arc than the axle for the same
+swept angle. `dubins.sample_poses` takes the offset and tightens the angular
+step by exactly that factor; handing `curve_valid` axle samples at `ds` while
+the body swings wider would leave the proof about nothing in particular.
