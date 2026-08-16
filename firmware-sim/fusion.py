@@ -74,7 +74,6 @@ class SensorFusion:
         velocitySrcs,
         poseSrcs=(),
         poseCorrectionGain=FusionWeights.PoseCorrectionGain,
-        seedPoseMeanWithModel=False,
     ):
         # etl::vector bounds are fixed capacity; the C++ constructor clamps
         # with etl::min and silently drops the overflow. Same here.
@@ -84,10 +83,6 @@ class SensorFusion:
         self.fusedVelocity = Velocity(0.0, 0.0)
         self.fusedPose = Pose(0.0, 0.0, 0.0)
         self.poseCorrectionGain = poseCorrectionGain
-        # See _fusePose(). False mirrors sensorFusion.h exactly, which is this
-        # module's job; True is the one-line change that makes the weighted mean
-        # mean what its own comment says.
-        self.seedPoseMeanWithModel = seedPoseMeanWithModel
 
         self.modelObserver = ModelObserver(self._getFusedVelocity)
         self.estimate = _Estimate(self)
@@ -164,33 +159,28 @@ class SensorFusion:
         )
 
     def _fusePose(self, dead_reckoned):
-        # All three weights start at 1.0 "to represent the Model_Observer's
-        # trust", as sensorFusion.h has it. For theta that is consistent: the
-        # numerator accumulates *deltas*, and the model's own delta really is
-        # zero, so the mean is an honest blend that applies 1/(1+t) of the
-        # observer's correction.
+        # All six totals start at zero, so the ModelObserver gets no vote of its
+        # own and the weighted mean is over the pose sources alone. The result
+        # is then applied as a *correction* to dead reckoning rather than as a
+        # replacement for it: each axis moves poseCorrectionGain of the way from
+        # where dead reckoning says the robot is to where the sources say it is.
         #
-        # For x and y it is not. Those numerators accumulate *absolute*
-        # positions, and the model contributes nothing to them -- so its vote is
-        # a vote for the origin rather than for where dead reckoning says the
-        # robot is. With one source at trust t the mean comes out
-        # t*correction/(1+t), and a source agreeing exactly with dead reckoning
-        # still drags the estimate toward (0, 0) by g/(1+t) of the remaining
-        # distance every tick: 17% per control loop at the .ino's t=0.2, g=0.2.
-        # At 1 kHz the position is pinned at the origin within milliseconds,
-        # whatever the robot does.
+        # An axis no source has an opinion on keeps dead reckoning untouched,
+        # which is what the `<= 0.0` guards are for. That is not a rare edge
+        # case -- the .ino runs its lidar source at FusionWeights::XYPTrust
+        # (1, 1, 0), so dthetaWeightTotal is zero every tick and theta is pure
+        # dead reckoning by construction.
         #
-        # Mirrored rather than quietly corrected: predicting what the firmware
-        # does is the whole job of this file. seedPoseMeanWithModel gives x and
-        # y the matching dead-reckoned term, which is what the header's own
-        # comment describes. theta is untouched by it -- there is nothing there
-        # to fix. Run the sim both ways before changing the header.
-        if self.seedPoseMeanWithModel:
-            xTotal, yTotal = dead_reckoned.x, dead_reckoned.y
-        else:
-            xTotal = yTotal = 0.0
-        dthetaTotal = 0.0
-        xWeightTotal = yWeightTotal = dthetaWeightTotal = 1.0
+        # This is the corrected form. Earlier revisions of sensorFusion.h seeded
+        # the three weights at 1.0 "to represent the Model_Observer's trust"
+        # while leaving the numerators at zero, so the model's vote for x and y
+        # was a vote for the *origin*: a source agreeing exactly with dead
+        # reckoning still dragged the estimate toward (0, 0) by g/(1+t) of the
+        # remaining distance every tick, pinning the position within
+        # milliseconds at 1 kHz. theta escaped it because its numerator
+        # accumulates deltas, and the model's own delta really is zero.
+        xTotal = yTotal = dthetaTotal = 0.0
+        xWeightTotal = yWeightTotal = dthetaWeightTotal = 0.0
 
         for src in self.poseSources:
             if not src.observer.ready():

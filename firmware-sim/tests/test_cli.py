@@ -48,7 +48,7 @@ class TestTaskScenarios(unittest.TestCase):
     def test_task32_gets_a_wall_to_range_against(self):
         """Without one the beam saturates and DistancePlanner reverses for ever
         against a constant -- see scenarios.task32_bench."""
-        _, out = run("task32", "--fusion-fix", "--max-seconds", "10")
+        _, out = run("task32", "--max-seconds", "10")
         self.assertIn("front", out)
         self.assertNotIn("front 300", out)
 
@@ -70,7 +70,7 @@ class TestPlannedScenario(unittest.TestCase):
         self.assertIn("planner idle", out)
 
     def test_lidar_localisation_drives_the_whole_path(self):
-        code, out = run("--fusion-fix", "--max-seconds", "60")
+        code, out = run("--max-seconds", "60")
         self.assertEqual(code, 0, out)
         self.assertIn("planner idle", out)
         self.assertIn("clearance  clean", out)
@@ -80,20 +80,20 @@ class TestPlannedScenario(unittest.TestCase):
         reckoning can only carry that error along; the lidar has to remove it."""
         _, blind = run("--no-localisation", "--start-error", "25,15,4",
                        "--max-seconds", "60")
-        _, fixed = run("--fusion-fix", "--start-error", "25,15,4",
+        _, fixed = run("--start-error", "25,15,4",
                        "--max-seconds", "60")
         self.assertGreater(error_mm(blind), 20.0)
         self.assertLess(error_mm(fixed), 5.0)
 
     def test_the_observer_actually_uses_beams(self):
-        _, out = run("--fusion-fix", "--max-seconds", "60")
+        _, out = run("--max-seconds", "60")
         line = next(l for l in out.splitlines() if l.startswith("fixes"))
         self.assertNotIn(" 0 loops corrected", line)
 
     def test_json_output_round_trips(self):
         with tempfile.TemporaryDirectory() as d:
             out = pathlib.Path(d) / "run.json"
-            run("--fusion-fix", "--max-seconds", "60", "--json", str(out), "--quiet")
+            run("--max-seconds", "60", "--json", str(out), "--quiet")
             data = json.loads(out.read_text())
         self.assertTrue(data["finished"])
         self.assertEqual(data["scenario"], "planned")
@@ -103,7 +103,7 @@ class TestPlannedScenario(unittest.TestCase):
     def test_svg_output_is_written(self):
         with tempfile.TemporaryDirectory() as d:
             out = pathlib.Path(d) / "run.svg"
-            run("--fusion-fix", "--max-seconds", "60", "--svg", str(out), "--quiet")
+            run("--max-seconds", "60", "--svg", str(out), "--quiet")
             text = out.read_text()
         self.assertTrue(text.startswith("<svg"))
         self.assertTrue(text.rstrip().endswith("</svg>"))

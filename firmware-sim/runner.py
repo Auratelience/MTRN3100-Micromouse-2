@@ -133,7 +133,7 @@ class Runner:
         imu_obsv.init()
         lidar.init()
 
-        self.sf = s.fusion_factory(self.hw, s.seed_pose_mean)
+        self.sf = s.fusion_factory(self.hw)
 
         # Wired here rather than at construction, exactly as setup() does it:
         # the prior is SensorFusion's own dead-reckoned pose, and sf does not

@@ -10,6 +10,7 @@ from .constants import (
     MAZE_INSTRUCTION_MAX_LEN,
     PATH_SEGMENTS_MAX_LEN,
     PI_TWO,
+    PS_POSITION_TOL,
     SEGMENT_ADVANCE_THRESHOLD,
     STD_ANG_TOL,
     STD_DIST_TOL,
@@ -208,7 +209,7 @@ class PSPlanner:
         direction: int
 
     def __init__(self, KPLinear, KPAngular):
-        self.pp = PosePlanner(KPLinear, KPAngular)
+        self.pp = PosePlanner(KPLinear, KPAngular, PS_POSITION_TOL)
         self.instructions = []
         self.pathIdx = 0
 

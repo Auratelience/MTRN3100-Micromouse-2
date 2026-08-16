@@ -155,7 +155,6 @@ def build_scenario(args):
     here so the run loop below never has to care which mode it is in."""
     if args.scenario != "planned":
         scenario = SCENARIOS[args.scenario]()
-        scenario.seed_pose_mean = args.fusion_fix
         if args.scenario == "task32":
             # The one task that needs something to look at; see task32_bench().
             world, true_start = task32_bench()
@@ -205,7 +204,6 @@ def build_scenario(args):
         map=robot_map,
         localise=not args.no_localisation,
         cruise=args.cruise,
-        seed_pose_mean=args.fusion_fix,
     )
     scenario._tmp = tmp  # keep the planning dir alive for the run's lifetime
     return scenario, world, _offset(scenario.start_pose, args.start_error)
@@ -401,12 +399,6 @@ def parser():
     g.add_argument("--cruise", type=float, default=200.0, metavar="MM_S",
                    help="MotionPlanner cruise velocity (default 200, the .ino's; "
                         f"the IK ceiling is {MAXIMUM_FORWARD_VELOCITY:.0f})")
-    g.add_argument("--fusion-fix", action="store_true",
-                   help="seed fusePose()'s weighted mean with dead reckoning. "
-                        "Off by default because the sim mirrors sensorFusion.h "
-                        "as written -- and as written, ANY pose source collapses "
-                        "the estimate onto the origin. See fusion.py.")
-
     g = p.add_argument_group("generate a path first (runs path-planning under uv)")
     g.add_argument("--plan", metavar="IMAGE",
                    help="maze photo -- a path in mazes/ or a name like '5'")

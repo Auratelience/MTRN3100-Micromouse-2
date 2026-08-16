@@ -2,6 +2,16 @@
 
 Each scenario reproduces one block's observer/fusion configuration, planner and
 gains. Changing a task in the .ino should mean changing exactly one entry here.
+
+`planned` is the only one the sketch still carries: micromouse.ino is down to a
+single live TASK 4.1 | 4.2 block, and the commented-out 3.1-3.4 blocks these
+were written against have since been deleted from it. `task31`-`task34` are
+kept anyway, as regression scenarios. The planners they drive -- DistancePlanner,
+HeadingPlanner, PosePlanner, PSPlanner -- are all still in planners.h, and this
+is the only thing that exercises them end to end; dropping them would leave
+four ported classes with no coverage of the loop they run in. They no longer
+correspond to anything you can uncomment in the sketch, so treat a failure in
+one as a report about planners.h, not about the .ino.
 """
 
 import math
@@ -10,7 +20,6 @@ from typing import Callable
 
 from .fusion import (
     FusionWeights,
-    ObserverPTrust,
     ObserverVTrust,
     PoseSource,
     SensorFusion,
@@ -24,12 +33,16 @@ from .types import Pose, Segment, Vec2D
 # kd injects noise since loop speed means minimum alpha = domega/dt is 9 rad/s
 DEFAULT_CONTROLLER_GAINS = (20.0, 3.0, 0.0)
 
-# const std::array<PoseSource, 1> obs_p = {{{&lidar_obsv, {0.2, 0.2, 0.1}}}};
+# const std::array<PoseSource, 1> obs_p = {{{&lidar_obsv, FusionWeights::XYPTrust}}};
 #
-# XYPTrust-shaped rather than XYPTrust itself: the .ino trusts heading a little,
-# not not-at-all. Heading off a square-on wall is only second-order observable
-# and the gyro's is better -- see the note above LidarObserver.
-LIDAR_POSE_TRUST = ObserverPTrust(0.2, 0.2, 0.1)
+# XYPTrust exactly (1, 1, 0), which is what the .ino now passes: heading off a
+# square-on wall is only second-order observable and the gyro's is better, so
+# the lidar gets no vote on theta at all -- see the note above LidarObserver.
+# An earlier revision used an XYPTrust-*shaped* (0.2, 0.2, 0.1) that trusted
+# heading a little; with the weights no longer seeded at 1.0 in fusePose, the
+# absolute scale of the trusts cancels out of the weighted mean anyway, and
+# only their ratio survives.
+LIDAR_POSE_TRUST = FusionWeights.XYPTrust
 
 
 @dataclass
@@ -44,12 +57,9 @@ class Scenario:
     # sketch. None means the observer has nothing to match against and every
     # solve returns the prior, so the run is dead reckoning.
     map: object = None
-    # Passed to SensorFusion. False is the header verbatim; True applies the
-    # one-line fusePose() fix. See fusion.SensorFusion._fusePose.
-    seed_pose_mean: bool = False
 
 
-def _wheel_and_imu_fusion(hw, seed=False):
+def _wheel_and_imu_fusion(hw):
     """The TASK 3.1 / 3.4 configuration.
 
     const std::array<VelocitySource, 2> obs_v = {{
@@ -65,7 +75,7 @@ def _wheel_and_imu_fusion(hw, seed=False):
     )
 
 
-def _wheel_v_imu_omega_fusion(hw, seed=False):
+def _wheel_v_imu_omega_fusion(hw):
     """The TASK 3.3 configuration: wheels for v only, IMU for omega only."""
     return SensorFusion(
         [
@@ -75,7 +85,7 @@ def _wheel_v_imu_omega_fusion(hw, seed=False):
     )
 
 
-def _wheel_imu_and_front_lidar_fusion(hw, seed=False):
+def _wheel_imu_and_front_lidar_fusion(hw):
     """The TASK 3.2 configuration.
 
     const std::array<PoseSource, 1> obs_p = {
@@ -93,19 +103,27 @@ def _wheel_imu_and_front_lidar_fusion(hw, seed=False):
         ],
         [PoseSource(hw.fl_obsv, FusionWeights.XPTrust)],
         1.0,
-        seedPoseMeanWithModel=seed,
     )
 
 
-def _wheel_imu_and_lidar_pose_fusion(hw, seed=False):
-    """The LIDAR LOCALISATION configuration -- what the .ino runs today.
+def _wheel_imu_and_lidar_pose_fusion(hw):
+    """The TASK 4.1 | 4.2 configuration -- what the .ino runs today.
 
-    const std::array<VelocitySource, 2> obs_v = {{
-        {&wheel_obsv, ObserverVTrust{1.0f, 0.2f}},
-        {&imu_obsv, FusionWeights::OmegaVTrust}
-    }};
-    const std::array<PoseSource, 1> obs_p = {{{&lidar_obsv, {0.2, 0.2, 0.1}}}};
-    SensorFusion sf(obs_v, obs_p);
+    const std::array<VelocitySource, 2> obs_v = {
+        {{&wheel_obsv, ObserverVTrust{1.0f, 0.2f}},
+         {&imu_obsv, FusionWeights::OmegaVTrust}}};
+    LidarObserver lidar_obsv(lidar, MAZE_MAP);
+    const std::array<PoseSource, 1> obs_p = {{{&lidar_obsv, FusionWeights::XYPTrust}}};
+    SensorFusion sf(obs_v, obs_p, 0);
+
+    One deliberate departure from the sketch: the gain stays at the
+    FusionWeights::PoseCorrectionGain default of 0.2, where the .ino currently
+    passes 0. A gain of 0 makes fusePose() return dead reckoning unchanged, so
+    mirroring it would compute the lidar fix and then multiply it by zero --
+    every localisation scenario here would silently become a dead-reckoning
+    one. Treated as a debug value left in the sketch rather than as the
+    intended configuration; `--no-localisation` is how you ask for dead
+    reckoning on purpose.
     """
     return SensorFusion(
         [
@@ -113,7 +131,6 @@ def _wheel_imu_and_lidar_pose_fusion(hw, seed=False):
             VelocitySource(hw.imu_obsv, FusionWeights.OmegaVTrust),
         ],
         [PoseSource(hw.lidar_obsv, LIDAR_POSE_TRUST)],
-        seedPoseMeanWithModel=seed,
     )
 
 
@@ -253,7 +270,6 @@ def planned(
     localise=True,
     cruise=PLANNED_CRUISE_MM_S,
     start_pose=None,
-    seed_pose_mean=False,
     name="planned",
     description=None,
 ):
@@ -294,5 +310,4 @@ def planned(
         planner_factory,
         fusion,
         map=map if localise else None,
-        seed_pose_mean=seed_pose_mean,
     )

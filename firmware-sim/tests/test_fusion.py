@@ -1,4 +1,3 @@
-import math
 import unittest
 
 from ..fusion import (
@@ -110,52 +109,56 @@ class TestPoseIntegration(unittest.TestCase):
             poseCorrectionGain=0.5,
         )
         sf.update(0.001)
-        # The header's arithmetic, not the intended one: the mean's denominator
-        # carries the model's weight of 1 but its numerator carries no
-        # dead-reckoned term, so 100 at trust 1 averages to 100/2 = 50, and the
-        # gain then moves 0 half way to that. See _fusePose.
-        self.assertAlmostEqual(sf.estimate.pose().x, 25.0, delta=0.5)
+        # The mean is over the pose sources alone -- the model gets no vote --
+        # so one source at any nonzero trust means the mean is just its estimate,
+        # 100, and the gain moves dead reckoning half way there. See _fusePose.
+        self.assertAlmostEqual(sf.estimate.pose().x, 50.0, delta=0.5)
 
-    def test_seeding_the_mean_makes_the_gain_mean_what_it_says(self):
-        sf = SensorFusion(
-            [VelocitySource(FakeV(0.0, 0.0))],
-            [PoseSource(FakeP(Pose(100.0, 0.0, 0.0)), FusionWeights.XPTrust)],
-            poseCorrectionGain=0.5,
-            seedPoseMeanWithModel=True,
-        )
-        sf.update(0.001)
-        # dead reckoning says x=0, observer says 100, both at weight 1 -> the
-        # mean is 50, and gain 0.5 moves 0 half way to it
-        self.assertAlmostEqual(sf.estimate.pose().x, 25.0, delta=0.5)
+    def test_the_mean_is_scale_invariant_in_the_trusts(self):
+        """With the weights no longer seeded at 1.0, only the *ratio* of the
+        trusts survives into the weighted mean. A lone source at trust 0.2 and
+        the same source at trust 1.0 must land in the same place -- which is
+        why the .ino moving from (0.2, 0.2, 0.1) to XYPTrust changed nothing."""
+        for trust in (ObserverPTrust(0.2, 0.0, 0.0), FusionWeights.XPTrust):
+            sf = SensorFusion(
+                [VelocitySource(FakeV(0.0, 0.0))],
+                [PoseSource(FakeP(Pose(100.0, 0.0, 0.0)), trust)],
+                poseCorrectionGain=0.5,
+            )
+            sf.update(0.001)
+            self.assertAlmostEqual(sf.estimate.pose().x, 50.0, delta=0.5)
 
-    def test_a_source_that_agrees_still_drags_the_estimate_to_the_origin(self):
-        """The header bug, pinned. A pose source reporting exactly what dead
-        reckoning already says should be a no-op; instead it decays the estimate
-        toward (0, 0, 0) every single tick, because the model's vote in the
-        weighted mean is a vote for zero."""
+    def test_a_source_that_agrees_is_a_no_op(self):
+        """The regression the header fix bought. A pose source reporting exactly
+        what dead reckoning already says must leave the estimate alone. Under the
+        old arithmetic -- weights seeded at 1.0, numerators at 0 -- the model's
+        vote was a vote for the *origin*, and this decayed to 0 within a few
+        dozen ticks whatever the robot was doing."""
         agreeing = FakeP(Pose(100.0, 0.0, 0.0))
         sf = SensorFusion(
             [VelocitySource(FakeV(0.0, 0.0))],
-            [PoseSource(agreeing, ObserverPTrust(0.2, 0.2, 0.1))],
+            [PoseSource(agreeing, FusionWeights.XYPTrust)],
         )
         sf.set(Pose(100.0, 0.0, 0.0))
         for _ in range(50):
             agreeing._p = Pose(sf.estimate.pose().x, 0.0, 0.0)  # always agrees
             sf.update(0.001)
-        self.assertLess(sf.estimate.pose().x, 1.0)
+        self.assertAlmostEqual(sf.estimate.pose().x, 100.0, delta=0.01)
 
-        # ...and does not, once the numerator is seeded to match.
-        agreeing = FakeP(Pose(100.0, 0.0, 0.0))
-        fixed = SensorFusion(
+    def test_an_axis_with_no_trust_keeps_dead_reckoning(self):
+        """XYPTrust is (1, 1, 0), so dthetaWeightTotal is zero every tick and
+        the `<= 0.0` guard hands theta straight back. This is the .ino's live
+        configuration, not an edge case: heading there is pure dead reckoning."""
+        fake = FakeP(Pose(0.0, 0.0, 1.0))
+        sf = SensorFusion(
             [VelocitySource(FakeV(0.0, 0.0))],
-            [PoseSource(agreeing, ObserverPTrust(0.2, 0.2, 0.1))],
-            seedPoseMeanWithModel=True,
+            [PoseSource(fake, FusionWeights.XYPTrust)],
+            poseCorrectionGain=1.0,
         )
-        fixed.set(Pose(100.0, 0.0, 0.0))
-        for _ in range(50):
-            agreeing._p = Pose(fixed.estimate.pose().x, 0.0, 0.0)
-            fixed.update(0.001)
-        self.assertAlmostEqual(fixed.estimate.pose().x, 100.0, delta=0.01)
+        sf.set(Pose(0.0, 0.0, 0.5))
+        fake._p = Pose(0.0, 0.0, 1.0)  # disagrees by 0.5 rad
+        sf.update(0.001)
+        self.assertAlmostEqual(sf.estimate.pose().theta, 0.5, places=4)
 
     def test_pose_correction_persists_across_ticks(self):
         # modelObserver.set() after fusePose() is what makes this hold
@@ -166,8 +169,8 @@ class TestPoseIntegration(unittest.TestCase):
         )
         sf.update(0.001)
         sf.update(0.001)
-        # 0 -> 25 -> 25 + 0.5 * (50 - 25)
-        self.assertAlmostEqual(sf.estimate.pose().x, 37.5, delta=0.5)
+        # 0 -> 50 -> 50 + 0.5 * (100 - 50)
+        self.assertAlmostEqual(sf.estimate.pose().x, 75.0, delta=0.5)
 
     def test_unready_pose_source_applies_no_correction(self):
         sf = SensorFusion(
@@ -200,28 +203,10 @@ class TestPoseIntegration(unittest.TestCase):
         # set() just re-datumed the observer; make it disagree again
         fake._p = Pose(0.0, 0.0, -3.0)
         sf.update(0.001)
-        # 3.0 -> -3.0 is a 0.283 rad step through pi, not a 6 rad swing. Only
-        # half of it lands, for the same reason as the x tests above: the
-        # weighted mean's denominator counts the model, the numerator does not.
-        self.assertAlmostEqual(sf.estimate.pose().theta, math.pi, delta=0.01)
-
-    def test_seeding_the_mean_leaves_theta_alone(self):
-        """theta's numerator accumulates deltas, and the model's own delta is
-        zero, so its vote at weight 1 is already the right one. The x/y fix has
-        nothing to do there and must not change the answer."""
-        for seeded in (False, True):
-            fake = FakeP(Pose(0.0, 0.0, 0.0))
-            sf = SensorFusion(
-                [VelocitySource(FakeV(0.0, 0.0))],
-                [PoseSource(fake, FusionWeights.ThetaPTrust)],
-                poseCorrectionGain=1.0,
-                seedPoseMeanWithModel=seeded,
-            )
-            sf.set(Pose(0.0, 0.0, 3.0))
-            fake._p = Pose(0.0, 0.0, -3.0)
-            sf.update(0.001)
-            # half of the 0.283 rad step, the model holding the other half
-            self.assertAlmostEqual(sf.estimate.pose().theta, math.pi, delta=0.01)
+        # 3.0 -> -3.0 is a 0.283 rad step through pi, not a 6 rad swing, and at
+        # gain 1.0 all of it lands: the model no longer holds half the weight.
+        # 3.0 + 0.283 wraps back to -3.0.
+        self.assertAlmostEqual(sf.estimate.pose().theta, -3.0, delta=0.01)
 
     def test_set_pose_resets_model_observer(self):
         sf = SensorFusion([VelocitySource(FakeV(0.0, 0.0))])

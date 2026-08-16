@@ -106,6 +106,16 @@ class TestPosePlanner(unittest.TestCase):
         self.assertEqual(out.v, 0.0)
         self.assertGreater(out.omega, 0.0)
 
+    def test_psplanner_uses_larger_position_deadband_for_heading_handoff(self):
+        p = PSPlanner(10.0, 5.0)
+        p.setStart(PSPlanner.GridPose(0, 0, PSPlanner.Direction.North))
+        p.addInstruction(PSPlanner.Instruction.Forwards)
+
+        # The target is one cell (180 mm) ahead; 5 mm error is outside the
+        # ordinary PosePlanner deadband but inside PSPlanner's 10 mm deadband.
+        out = p.update(Pose(175.0, 0.0, 0.0), 0.001)
+        self.assertEqual(out.v, 0.0)
+
 
 class TestMotionPlanner(unittest.TestCase):
     def test_waits_with_no_segments(self):
