@@ -1,6 +1,7 @@
 // Micromouse Constants
 //
 // Zimmy Levi z5587840
+// Stephen Gottlieb z5481352
 
 #pragma once
 #include <Arduino.h>
@@ -61,7 +62,7 @@ constexpr float SEGMENT_ADVANCE_THRESHOLD    = 0.995f;
 // Nine, not ten, because maze_map.h describes a 10x10 post lattice, and ten
 // post lines bound nine cells. Cell centres in it run -180 mm to 1260 mm on
 // both axes.
-constexpr uint8_t MAZE_SIZE = 2;
+constexpr uint8_t MAZE_SIZE = 9;
 
 // The maze is not a full rectangle: every corner is chamfered, so the corner
 // cell and its two orthogonal neighbours are not there. This is the Manhattan
@@ -73,7 +74,7 @@ constexpr uint8_t MAZE_SIZE = 2;
 // exploration starts. MazeMapper has no concept of a cell that does not
 // exist, and does not need one: a cell walled on every side is one its search
 // can neither enter nor plan through.
-constexpr int8_t MAZE_CORNER_CROP = -1;
+constexpr int8_t MAZE_CORNER_CROP = 1;
 
 // Physical size of one grid cell, mm. Full-size Micromouse uses 180mm,
 // half-size 168mm. Shared by the path factory and the instruction runner.

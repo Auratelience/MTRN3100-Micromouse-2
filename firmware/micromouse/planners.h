@@ -1,6 +1,7 @@
 // Planners
 //
 // Zimmy Levi z5587840
+// Stephen Gottlieb z5481352
 
 #pragma once
 
@@ -58,6 +59,15 @@ class MotionPlanner {
 
     uint16_t idx() const {
         return pathIdx;
+    }
+
+    // A read only view of appeneded path for safe external access
+    uint16_t len() const {
+        return static_cast<uint16_t>(pathLen);
+    }
+
+    const Segment& segment(uint16_t i) const {
+        return path[i];
     }
 
     private:

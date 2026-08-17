@@ -1,5 +1,5 @@
 // Live maze-exploration display
-//
+// Stephen Gottlieb z5481352
 // Zimmy Levi z5587840
 
 #pragma once
@@ -219,6 +219,12 @@ class OLEDMap {
         g.setCursor(OLED_TEXT_PANE_X, 4 * OLED_TEXT_HEIGHT);
         g.print(F("V "));
         g.print(mapper.visitedCount());
+
+        if (!progress.is_valid()) return;
+
+        g.setCursor(OLED_TEXT_PANE_X, 5 * OLED_TEXT_HEIGHT);
+        g.print(static_cast<int>(lroundf(clampFraction(progress()) * 100.0f)));
+        g.print('%');
     }
 };
 

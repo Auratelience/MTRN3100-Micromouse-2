@@ -69,7 +69,6 @@ FrontLidarObserver fl_obsv(lidar);
 //     {&imu_obsv, FusionWeights::OmegaVTrust}
 // }};
 
-
 // TASK 4.1 | 4.2
 // The observer localises against the map export_map.py fitted by CV from a
 // photograph of the maze. 4.3 has no photograph -- finding the maze is the
@@ -78,7 +77,7 @@ FrontLidarObserver fl_obsv(lidar);
 // the map type, and MazeWallMap offers Map's cast()/candidates().
 //
 // #include "maze_map.h"
-// LidarObserver lidar_obsv(lidar, MAZE_MAP);
+// LidarObserver<Map<MAZE_OBSTACLE_COUNT>> lidar_obsv(lidar, MAZE_MAP);
 
 // TASK 4.3
 const std::array<VelocitySource, 2> obs_v = {{
@@ -86,9 +85,18 @@ const std::array<VelocitySource, 2> obs_v = {{
     {&imu_obsv, FusionWeights::OmegaVTrust}
 }};
 PSPlanner psp(8.0f, 8.0f);
-mazeMapper::Cell startCell = {0, 0};
+
+// The two things section 4.3 permits to be hard-coded, and the only two lines
+// to change when the demonstrator names them on the day.
+//
+// NOT {0, 0}: every corner of the maze is chamfered, so MAZE_CORNER_CROP seals
+// the corner cell and its two orthogonal neighbours before exploration starts.
+// A robot placed on a sealed cell is walled in on all four sides and cannot
+// take a first move. {1, 1} is the nearest cell that exists, and is what
+// scripts/build_maze.sh defaults its own --from to for the same reason.
+mazeMapper::Cell startCell = {1, 1};
 Direction startHeading = North;
-mazeMapper::Cell goalCell = {1, 0};
+mazeMapper::Cell goalCell = {4, 4};
 
 MazeRunner<MAZE_SIZE> runner(
     lidar,
@@ -111,7 +119,6 @@ Pose fusedPose() { return sf.estimate.pose(); }
 // own route and drives it cell by cell through PSPlanner instead, so this and
 // its std::array<Segment, 256> -- about 10 kB of the sketch's RAM -- come out.
 // scripts/build_maze.sh still generates maze_path.h either way.
-//
 // MotionPlanner planner(10, 0.06f, 200.0f);
 
 // Loop period, seconds. Defined here rather than beside the controller because
@@ -120,8 +127,64 @@ float dt = 0;
 
 OLEDDisplay display;
 
+// TASK 4.1, 4.2
+// The planned route as waypoints for OLEDPath::setRoute()
+// One point per segment endpoint
+
+// constexpr size_t ROUTE_MAX = 64;
+// std::array<Vec2D, ROUTE_MAX> routePoints;
+// size_t routeLen = 0;
+//
+// // Returns false if the path empty or overflows, for error checking with display
+// bool buildRoute() {
+//     routeLen = 0;
+//     const uint16_t n = planner.len();
+//     if (n == 0) return false;
+//
+//     routePoints[routeLen++] = planner.segment(0).start;
+//     for (uint16_t i = 0; i < n; ++i) {
+//         if (routeLen >= ROUTE_MAX) return false;
+//         routePoints[routeLen++] = planner.segment(i).end;
+//     }
+//     return true;
+// }
+//
+// // Fraction of the path driven for the percentage and the bar
+// // By arc length rather than by segment count
+// static float segLength(const Segment& s) {
+//     const float d = s.remainingDistance(s.start);
+//     return isfinite(d) ? d : 0.0f; // a zero-length segment divides 0 by 0
+// }
+//
+// float pathProgress() {
+//     const uint16_t n = planner.len();
+//     if (n == 0) return 0.0f;
+//
+//     const uint16_t i = planner.idx();
+//     if (i >= n) return 1.0f;
+//
+//     float total = 0.0f;
+//     float done  = 0.0f;
+//     for (uint16_t k = 0; k < n; ++k) {
+//         const float L = segLength(planner.segment(k));
+//         total += L;
+//         if (k < i) done += L;
+//     }
+//
+//     if (total <= 0.0f) return 0.0f;
+//
+//     const Pose p = sf.estimate.pose();
+//     const Segment& s = planner.segment(i);
+//     const float remaining = s.remainingDistance(Vec2D(p.x, p.y));
+//     done += segLength(s) - (isfinite(remaining) ? remaining : 0.0f);
+//
+//     return clampFraction(done / total);
+// }
+
 // TASK 4.3
 // Delegates, so neither display depends on the runner's type.
+
+// exploreProgress() is cells visited over cells the maze actually has
 float exploreProgress() {
     return runner.exploreProgress();
 }
@@ -140,11 +203,10 @@ OLEDMap<MAZE_SIZE> oledMap(display, runner.map(), etl::delegate<float()>::create
 //     display,
 //     MAZE_MAP,
 //     etl::delegate<Pose()>::create<fusedPose>(),
-//     etl::delegate<float()>::create<raceProgress>()
+//     etl::delegate<float()>::create<pathProgress>()
 // );
 
 // TASK 4.3
-// OLEDPath<MazeWallMap<MAZE_SIZE>> oledPath(
 OLEDPath<MazeWallMap<MAZE_SIZE>> oledPath(
     display,
     wallMap,
@@ -153,25 +215,24 @@ OLEDPath<MazeWallMap<MAZE_SIZE>> oledPath(
 );
 
 // TASK 4.1 | 4.2
-// The scalar readout as it was, reporting MotionPlanner. Uncommenting it also
-// needs the MotionPlanner declaration above; the class itself is unchanged
-// apart from its name (OLED -> OLEDValues) and taking the shared OLEDDisplay,
-// since OLEDMap and OLEDPath draw to the same panel and only one thing can
-// own it.
+// The scalar readout as it was, reporting MotionPlanner. Kept constructed and
+// available for bring-up, but not driven in loop(): OLEDDisplay::due() is
+// consuming, so only one renderer may draw per tick.
 //
+// The class itself is unchanged apart from its name (OLED -> OLEDValues) and
+// taking the shared OLEDDisplay, since OLEDMap and OLEDPath draw to the same
+// panel and only one thing can own it.
 // const std::array values = {
 //     OLEDValue{"x", []() { return sf.estimate.pose().x; }},
 //     OLEDValue{"y", []() { return sf.estimate.pose().y; }},
 //     OLEDValue{"th", []() { return sf.estimate.pose().theta; }},
 //     OLEDValue{"dt", []() { return dt; }},
-//     OLEDValue{"pgr", []() { return planner.progress(sf.estimate.pose()); }},
+//     OLEDValue{"pgr", []() { return pathProgress(); }},
 //     OLEDValue{"sta", []() { return static_cast<float>(planner.s()); }},
 //     OLEDValue{"idx", []() { return static_cast<float>(planner.idx()); }},
 // };
 
 // TASK 4.3
-// Kept constructed and available for bring-up, but not driven in loop():
-// OLEDDisplay::due() is consuming, so only one renderer may draw per tick.
 const std::array values = {
     OLEDValue{"x", []() { return sf.estimate.pose().x; }},
     OLEDValue{"y", []() { return sf.estimate.pose().y; }},
@@ -241,8 +302,6 @@ void setup() {
     // NOTE THAT X-AXIS IS FORWARDS: Y-AXIS IS LEFT!!!
 
     // TASK 4.1 | 4.2
-
-    // TASK 4.1 | 4.2
     // Loads the pre-computed route. maze_path.h is a bare list of
     // planner.appendSegment(...) calls, so it is included here, inside a
     // function body, rather than at file scope.
@@ -267,7 +326,20 @@ void setup() {
         Serial.println(" reachable]");
     }
 
-    // TASK 4.3
+    // TASK 4.1 | 4.2
+    // The route the display draws. Built once, because maze_path.h is fixed --
+    // 4.3 re-sets it every tick instead, since the route is discovered.
+    //
+    // Serial.print("Building route...");
+    // if (!buildRoute()) {
+    //     Serial.println("\b\b\b [NO ROUTE AVAILABLE, OR MORE THAN MAX POINTS]");
+    // } else {
+    //     oledPath.setRoute(etl::span<const Vec2D>(routePoints.data(), routeLen));
+    //     Serial.print("\b\b\b [OKAY, ");
+    //     Serial.print(static_cast<unsigned int>(routeLen));
+    //     Serial.println(" POINTS]");
+    // }
+
     // After runner.begin(), which seeds the perimeter -- the extent the map
     // pane is fitted to. Walls found later fall inside it, so one fit holds
     // for the whole run.
@@ -306,16 +378,15 @@ void loop() {
     mc.update(desired, current, dt);
 
     // TASK 4.1 | 4.2
-    // The scalar readout. The OLED_REFRESH_MS gate that used to wrap this --
-    // and a previous_oled_time to go with it -- is gone from loop(): it
-    // duplicated the one inside the renderer, and both now live in
-    // OLEDDisplay::due().
+    // The map, the planned route, the robot on it, and the completion bar.
+    // The route was set once in setup(); only the pose and the progress move.
     //
-    // oled.update();
+    // oledPath.update();
 
     // TASK 4.3
-    // One renderer per tick: OLEDDisplay::due() is consuming, so drawing two
-    // would starve whichever asked second.
+    // While exploring, OLEDMap shows the map being discovered and the
+    // cells visited. Once the route is planned and robot is running it, 
+    // OLEDPath takes over and shows that route
     if (runner.racing()) {
         oledPath.setRoute(runner.route());
         oledPath.update();
