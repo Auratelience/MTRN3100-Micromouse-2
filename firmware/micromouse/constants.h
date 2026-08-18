@@ -25,7 +25,7 @@ constexpr float ENC_RAD_PER_REV_LEFT    = 6.04f;
 constexpr float ENC_RAD_PER_REV_RIGHT   = 6.18f;
 constexpr float ENC_SCALE_LEFT          = TWO_PI / ENC_RAD_PER_REV_LEFT;
 constexpr float ENC_SCALE_RIGHT         = TWO_PI / ENC_RAD_PER_REV_RIGHT;
-constexpr float AXLE_LEN                = 92.5;
+constexpr float AXLE_LEN                = 93.5;
 constexpr uint8_t AXLE_DIST_FROM_CENTRE = 20;
 
 constexpr uint8_t MAXIMUM_WHEEL_PWM            = 255;
@@ -33,7 +33,19 @@ constexpr float MAXIMUM_LATERAL_ACCELERATION   = 4;  // m/s²
 constexpr float MAXIMUM_WHEEL_ANGULAR_VELOCITY = 25; // rad/s
 
 // CONTROL LOOP
+// Floor on a usable loop period. A guard against dividing by a dt of zero when
+// loop() re-enters before micros() has moved, and nothing more -- it is not the
+// period the loop runs at, and it is four orders of magnitude below it.
 constexpr float MIN_LOOP_DT_S = 0.000005f; // 5 μs
+
+// Rate loop() actually runs at, excluding the OLED frames. The IMU's sample
+// rate is derived from this (see IMU_SAMPLE_RATE_DIVIDER), so it wants to be
+// measured rather than hoped for -- the sketch prints observed samples per
+// cycle for exactly that purpose, and a figure far from 1 means this is wrong.
+//
+// Being wrong costs granularity, not accuracy: summing the FIFO integrates
+// exactly whatever it holds, whatever rate it was filled at.
+constexpr unsigned long CONTROL_LOOP_NOMINAL_HZ = 300;
 
 // MOTION
 constexpr long PATH_SEGMENTS_MAX_LEN         = 256;
@@ -45,12 +57,12 @@ constexpr float STD_DIST_TOL                 = 2.0f;
 // Position error at which PSPlanner stops translating and starts aligning
 // with the target heading.  The larger deadband prevents lidar/odometry
 // noise near a cell centre from delaying the turn handoff.
-constexpr float PS_POSITION_TOL              = 10.0f;
-constexpr float STD_ANG_TOL                  = 0.05f;
+constexpr float PS_POSITION_TOL              = 8.0f;
+constexpr float STD_ANG_TOL                  = 0.02f;
 constexpr float SEGMENT_ADVANCE_THRESHOLD    = 0.995f;
 
 // MAZE
-// Cells per side lives in task43.h, next to the MazeRunner/MazeWallMap/OLEDMap
+// Cells per side lives in task43.h, next to the MazeRunner and MazeWallMap
 // instances it sizes: 4.3 is the only task that builds a MazeMapper.
 //
 // Physical size of one grid cell, mm. Full-size Micromouse uses 180mm,
@@ -88,11 +100,83 @@ constexpr unsigned int I2C_RECOVERY_HALF_PERIOD_US = 5; // ~100kHz recovery cloc
 constexpr uint8_t I2C_RECOVERY_MAX_PULSES          = 9;
 
 // IMU
-constexpr uint8_t IMU_ADDRESS                  = 0x68;
-constexpr int IMU_STARTUP_SETTLE_MS            = 500;
-constexpr int IMU_STARTUP_READING_COUNT        = 500;
-constexpr uint8_t IMU_STARTUP_READING_DELAY_MS = 5;
-constexpr uint8_t IMU_ROLLING_AVG_SAMPLES      = 8;
+constexpr uint8_t IMU_ADDRESS       = 0x68;
+constexpr int IMU_STARTUP_SETTLE_MS = 500;
+
+// Rolling average behind the direct-read accessors (gyroX/Y, accelX/Y/Z).
+// Heading does not go through them any more -- it comes off the FIFO, which
+// needs no smoothing because it drops no samples to smooth over.
+constexpr uint8_t IMU_ROLLING_AVG_SAMPLES = 8;
+
+// Settling time after each PWR_MGMT_1 write, for the PLL to lock onto the gyro
+// reference before anything is clocked off it.
+constexpr uint8_t IMU_CLOCK_SETTLE_MS = 10;
+
+// The rate SMPLRT_DIV divides. 1 kHz whenever the DLPF is doing anything at
+// all; only bypassing it altogether raises this to 8 kHz. IMU::init derives the
+// period it actually integrates with from the DLPF argument it is handed rather
+// than from here, so a bypassed filter costs FIFO depth but not accuracy.
+constexpr unsigned long IMU_GYRO_OUTPUT_RATE_HZ = 1000;
+
+// SMPLRT_DIV, derived from the loop rate rather than picked.
+//
+// The target is one sample per control cycle, at minimum. Nothing about the
+// integral needs that -- summing the FIFO is exact at any rate, which is the
+// whole point of reading it rather than the data registers -- but a sample rate
+// below the loop rate leaves some cycles with an empty batch and theta standing
+// still until the next one, so the correction lands quantised to the sample
+// period instead of to the loop.
+//
+// Integer floor before the minus one, so what comes out is at or above the loop
+// rate rather than nearest to it. Clamped at zero because no divider can ask
+// for more than the output rate: a loop faster than 1 kHz simply gets 1 kHz,
+// and the batches it drains start coming back empty half the time.
+constexpr uint8_t imuSampleRateDivider(unsigned long loop_hz) {
+    return static_cast<uint8_t>(
+        ((loop_hz == 0 || loop_hz > IMU_GYRO_OUTPUT_RATE_HZ)
+                ? 1UL
+                : IMU_GYRO_OUTPUT_RATE_HZ / loop_hz) -
+        1UL
+    );
+}
+
+constexpr uint8_t IMU_SAMPLE_RATE_DIVIDER = imuSampleRateDivider(CONTROL_LOOP_NOMINAL_HZ);
+constexpr unsigned long IMU_SAMPLE_RATE_HZ =
+    IMU_GYRO_OUTPUT_RATE_HZ / (1UL + IMU_SAMPLE_RATE_DIVIDER);
+
+// Depth of the sensor's own buffer. Heading survives an OLED frame only because
+// the sensor keeps filling this while nothing is reading it, so it is the
+// budget the sample rate has to fit inside.
+constexpr uint16_t IMU_FIFO_CAPACITY_BYTES = 1024;
+
+// Longest stretch loop() is expected to go without draining. The framebuffer
+// push is the one that matters, and OLED_REFRESH_MS is only how often it
+// happens -- the transfer itself is ~23 ms of a 1 KiB write at 400 kHz. 40 ms
+// leaves room for it to be worse than that.
+constexpr unsigned long IMU_MAX_DRAIN_GAP_MS = 40;
+
+// Z gyro only, so two bytes a sample. Asserted at a quarter of the buffer
+// rather than at the brim: an overflow does not degrade the estimate, it drops
+// a batch of heading outright, so the margin is the feature.
+static_assert(
+    IMU_SAMPLE_RATE_HZ * IMU_MAX_DRAIN_GAP_MS * 2UL / 1000UL < IMU_FIFO_CAPACITY_BYTES / 4UL,
+    "IMU sample rate leaves under 4x FIFO headroom across the worst expected "
+    "drain gap: lower CONTROL_LOOP_NOMINAL_HZ, or drain more often than "
+    "IMU_MAX_DRAIN_GAP_MS."
+);
+
+// Bytes per FIFO read. Kept under the Wire library's own buffer so a chunk is
+// never silently truncated, and even so a partial sample is never returned.
+// Even, so a chunk boundary is always a sample boundary.
+constexpr uint8_t IMU_FIFO_CHUNK_BYTES = 32;
+static_assert(IMU_FIFO_CHUNK_BYTES % 2 == 0, "A FIFO chunk must be whole samples.");
+
+// Zero-rate calibration at startup: how long the window is, and how often it
+// is drained inside that window. The drain interval only has to stay well
+// inside the FIFO's depth, so the window length is free to be whatever
+// averages the noise down.
+constexpr unsigned long IMU_CALIBRATION_MS       = 2500;
+constexpr unsigned long IMU_CALIBRATION_DRAIN_MS = 200;
 
 // LIDAR
 constexpr uint8_t LIDAR_FRONT_ADDRESS        = 0x30;
@@ -192,37 +276,40 @@ constexpr float LIDAR_OBSERVER_SEARCH_RADIUS_MM = 400.0f;
 constexpr size_t LIDAR_OBSERVER_MAX_CANDIDATES = 48;
 
 // OLED
-constexpr uint8_t OLED_WIDTH                  = 128;
-constexpr uint8_t OLED_HEIGHT                 = 64;
-constexpr uint8_t OLED_MAX_VALUES             = 8;
-constexpr uint8_t OLED_ADDRESS                = 0x3C;
-constexpr int8_t OLED_NO_RESET_PIN            = -1;
-constexpr uint8_t OLED_REFRESH_MS             = 17; // ~58.8 Hz
-constexpr uint8_t OLED_TEXT_SIZE              = 1;
-constexpr uint8_t OLED_TEXT_HEIGHT            = 8;
-constexpr uint8_t OLED_CHAR_WIDTH             = 6;
-constexpr uint8_t OLED_ONE_COLUMN_LABEL_CHARS = 7;
-constexpr uint8_t OLED_TWO_COLUMN_LABEL_CHARS = 3;
-constexpr uint8_t OLED_ONE_COLUMN_DECIMALS    = 2;
-constexpr uint8_t OLED_TWO_COLUMN_DECIMALS    = 1;
+constexpr uint8_t OLED_WIDTH       = 128;
+constexpr uint8_t OLED_HEIGHT      = 64;
+constexpr uint8_t OLED_ADDRESS     = 0x3C;
+constexpr int8_t OLED_NO_RESET_PIN = -1;
+constexpr uint8_t OLED_TEXT_SIZE   = 1;
+constexpr uint8_t OLED_TEXT_HEIGHT = 8;
+constexpr uint8_t OLED_CHAR_WIDTH  = 6;
 
-// Map pane, shared by OLEDMap and OLEDPath. Square and as tall as the panel,
-// so a maze drawn into it is never letterboxed on the axis that matters.
-// OLEDMap divides the width by N for its cell pitch, so a square pane is also
-// what keeps a cell square.
+// ~24 Hz. Deliberately slower than the panel or the bus can go: OLEDScreen
+// redraws the whole map every frame -- 85 lines and 57 circles for the exported
+// maze -- and that work lands inside the control loop, between reading the pose
+// and commanding the motors. Nobody can read a pose off a display faster than
+// this, so the rate is set by what is legible rather than by what is possible,
+// and the loop keeps the difference.
+constexpr uint8_t OLED_REFRESH_MS = 100;
+
+// Map pane. Square and as tall as the panel, so a maze drawn into it is never
+// letterboxed on the axis that matters. Widening it past the panel height would
+// buy nothing for a square maze -- OLEDView takes the tighter of the two fits,
+// so the scale would stay pinned by the height and the extra columns would sit
+// empty.
 constexpr uint8_t OLED_MAP_PANE_X = 0;
 constexpr uint8_t OLED_MAP_PANE_W = 64;
 
-// Text pane. Starts two pixels clear of the map pane so a wall line drawn on
+// Values pane. Starts two pixels clear of the map pane so a wall line drawn on
 // the pane's right edge does not touch the first character column. That leaves
-// 62 px, which is 10 characters at OLED_CHAR_WIDTH.
+// 62 px, which is 10 characters at OLED_CHAR_WIDTH -- enough for "X  -1350",
+// the widest readout a maze this size can produce.
 constexpr uint8_t OLED_TEXT_PANE_X = 66;
 
-// Progress bar, drawn along the bottom of the text pane. Seven pixels is one
-// pixel of border either side of a five-pixel fill, which still reads as a
-// bar at this pixel density; the margin keeps it off the panel edge.
-constexpr uint8_t OLED_BAR_H      = 7;
-constexpr uint8_t OLED_BAR_MARGIN = 2;
+// Column the values pane prints numbers in, as a character offset from
+// OLED_TEXT_PANE_X. Two, so a one-character label and a space clear it and
+// every row's digits line up whatever the label.
+constexpr uint8_t OLED_VALUE_COLUMN = 2;
 
 // SENSOR FUSION
 constexpr size_t SENSOR_FUSION_MAX_VELOCITY_OBSERVERS = 4;

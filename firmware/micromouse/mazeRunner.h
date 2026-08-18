@@ -97,10 +97,6 @@ class MazeRunner {
 
     State state() const { return runState; }
 
-    // True once the run is driving a planned route rather than discovering
-    // one. The sketch selects which display to draw from this.
-    bool racing() const { return runState == State::Race || runState == State::Done; }
-
     const MazeMapper<N>& map() const { return mapper; }
 
     // The discovered route in millimetres, one point per cell, empty until
@@ -149,8 +145,22 @@ class MazeRunner {
     Velocity explore(const Pose& pose, float dt) {
         if (!moveInFlight) {
             stepExploration();
+            // DIAGNOSTIC: open the per-move accounting here, the first tick
+            // that has a pose to open it with.
+            diagSwept = 0.0f;
+            diagMaxDt = 0.0f;
+            diagTicks = 0;
+            diagTheta = pose.theta;
             return Velocity{0, 0};
         }
+
+        // DIAGNOSTIC: the total angle the estimate says has been swept, not the
+        // net change -- an over-rotation that is later corrected nets out, and
+        // the sweep is what is actually watched from outside.
+        diagSwept += fabsf(wrapAngle(pose.theta - diagTheta));
+        diagTheta = pose.theta;
+        if (dt > diagMaxDt) diagMaxDt = dt;
+        ++diagTicks;
 
         const Velocity desired = planner.update(pose, dt);
         if (!planner.done()) return desired;
@@ -344,8 +354,24 @@ class MazeRunner {
         Serial.print(',');
         Serial.print(mapper.position().y);
         Serial.print(F(" -> "));
-        Serial.println(directionChar(d));
+        Serial.print(directionChar(d));
+        // DIAGNOSTIC: swept is what the estimate believes. Compare it against
+        // what the robot physically did: they agree, and the command loop drove
+        // the extra rotation; they disagree, and the heading estimate did.
+        Serial.print(F(" | swept "));
+        Serial.print(diagSwept * RAD_TO_DEG, 1);
+        Serial.print(F("deg ticks "));
+        Serial.print(diagTicks);
+        Serial.print(F(" maxdt "));
+        Serial.print(diagMaxDt * 1000.0f, 1);
+        Serial.println(F("ms"));
     }
+
+    // DIAGNOSTIC
+    float diagSwept   = 0.0f;
+    float diagTheta   = 0.0f;
+    float diagMaxDt   = 0.0f;
+    uint16_t diagTicks = 0;
 };
 
 #pragma GCC pop_options

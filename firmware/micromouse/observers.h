@@ -99,60 +99,145 @@ class WheelObserver : public ObserverV {
     Velocity velocity;
 };
 
-class ImuObserver : public ObserverV {
+// Heading from the gyro, integrated on the sensor's own clock.
+//
+// A pose observer rather than a velocity one, and the distinction is the point
+// of the class. A velocity observer hands SensorFusion an omega, which
+// ModelObserver multiplies by the control loop's dt -- and those two describe
+// different intervals the moment the loop jitters. The OLED framebuffer
+// transfer is about 23 ms during which the gyro is not read at all, so a short
+// counter-rotation landing inside one is never sampled and its angle is simply
+// gone, while the same jerk landing just before one is held across the fat dt
+// and counted several times over. Either way the estimate comes out short of a
+// jerk, which is the failure this replaces.
+//
+// Reading the FIFO removes the coupling instead of tuning it. The sensor
+// samples into its own 1024-byte buffer at a fixed rate straight through the
+// stall, so the batch drained afterwards holds every sample, each covering
+// exactly IMU::samplePeriod() seconds. Integrating is then a sum, and the loop
+// dt never enters it -- update()'s parameter is deliberately unused.
+//
+// Coming in through the pose side is what keeps that exact. As a velocity
+// observer this could report dtheta/dt and let ModelObserver cancel the dt
+// back out, but fuseVelocity would average that against the wheel observer's
+// omega first and only a fraction of the batch would survive. A pose
+// observer's theta is weighted whole.
+//
+// Register with FusionWeights::ThetaPTrust. The x and y in the returned Pose
+// are not estimates of anything.
+class ImuObserver : public ObserverP {
     public:
 
     ImuObserver(IMU& imu) :
         imu(imu),
-        imu_velocity(0),
-        velocity({0, 0}),
-        gyro_z_drift(0),
-        accel_x_drift(0),
-        accel_y_drift(0),
+        theta(0),
+        gyro_z_bias_raw(0),
+        lost_batches(0),
         obsv_init(false) {}
 
-    // Call after imu.begin() succeeds. Measures gyro drift at rest.
+    // Call after imu.init() succeeds. Measures the gyro's zero-rate output at
+    // rest, in raw LSB, off the same FIFO stream update() integrates -- so the
+    // number cancels sample for sample rather than approximately.
+    //
+    // Blocking, and the robot must be still for it. A hand on the chassis here
+    // is written into the bias and comes back as drift for the rest of the run.
     void init() {
         delay(IMU_STARTUP_SETTLE_MS);
-        for (int i = 0; i < IMU_STARTUP_READING_COUNT; ++i) {
-            gyro_z_drift += imu.gyroZ();
-            accel_x_drift += imu.accelX();
-            accel_y_drift += imu.accelY();
-            delay(IMU_STARTUP_READING_DELAY_MS);
+        imu.resetFifo(); // drop the settling transient
+
+        int32_t sum  = 0;
+        uint32_t n   = 0;
+        const unsigned long until = millis() + IMU_CALIBRATION_MS;
+
+        // Drained in pieces rather than once at the end: the window is free to
+        // be as long as averaging wants only so long as no single wait comes
+        // near the FIFO's depth.
+        while (static_cast<long>(millis() - until) < 0) {
+            delay(IMU_CALIBRATION_DRAIN_MS);
+            const IMU::GyroBatch batch = imu.drainGyroZ();
+            if (batch.lost) {
+                // A hole in the window biases the mean by whatever was
+                // happening when the samples went. Start the average over
+                // rather than calibrate against it.
+                sum = 0;
+                n   = 0;
+                continue;
+            }
+            sum += batch.sum;
+            n += batch.count;
         }
-        gyro_z_drift /= IMU_STARTUP_READING_COUNT;
-        accel_x_drift /= IMU_STARTUP_READING_COUNT;
-        accel_y_drift /= IMU_STARTUP_READING_COUNT;
-        obsv_init = true;
+
+        if (n == 0) return; // ready() stays false and setup() reports it
+
+        gyro_z_bias_raw = static_cast<float>(sum) / static_cast<float>(n);
+        obsv_init       = true;
     }
 
-    Velocity estimate() override {
-        if (!obsv_init) return Velocity(0, 0);
-        return velocity;
+    // The dt is unused, which is the whole idea: the batch carries its own.
+    void update(float) override {
+        if (!obsv_init) return;
+
+        const IMU::GyroBatch batch = imu.drainGyroZ();
+        if (batch.lost) ++lost_batches;
+
+        ++updates;
+        samples_seen += batch.count;
+
+        if (batch.count == 0) return; // nothing new this cycle; theta stands
+
+        // Bias removed per sample, not per batch. The batch is a sum over count
+        // samples, so it carries count times the zero-rate offset.
+        const float dtheta =
+            (static_cast<float>(batch.sum) -
+                static_cast<float>(batch.count) * gyro_z_bias_raw) *
+            imu.gyroRadPerLsb() * imu.samplePeriod();
+
+        theta = wrapAngle(theta + dtheta);
     }
 
-    void update(float dt) override {
-        // Too unreliable for use
-        // imu_velocity += dt * imu.accelX();
-        velocity = {imu_velocity, imu.gyroZ() - gyro_z_drift};
+    // x and y are placeholders; ThetaPTrust weights them to nothing.
+    Pose estimate() override {
+        if (!obsv_init) return Pose{0, 0, 0};
+        return Pose{0, 0, theta};
     }
 
-    void set(Velocity v) override {
-        imu_velocity = v.v;
+    void set(Pose p) override {
+        theta = wrapAngle(p.theta);
     }
 
     bool ready() override {
         return obsv_init;
     }
 
+    // DIAGNOSTIC: batches thrown away because the FIFO overflowed or lost
+    // alignment. Each one is heading that was measured and then dropped, so a
+    // non-zero count here is the estimate silently going short.
+    unsigned long lostBatches() const {
+        return lost_batches;
+    }
+
+    // DIAGNOSTIC: mean FIFO samples per update(), and so a direct read on
+    // whether CONTROL_LOOP_NOMINAL_HZ -- which IMU_SAMPLE_RATE_DIVIDER is
+    // derived from -- matches the loop this is actually running in.
+    //
+    // Want a little over 1. Below 1 the sample rate is under the loop rate and
+    // some cycles see an empty batch, so theta updates in steps of the sample
+    // period; well above 1 the loop is slower than the constant claims and the
+    // rate could come down. Neither costs accuracy -- the batch integrates
+    // exactly either way -- so this is a tuning readout, not a fault light.
+    float samplesPerUpdate() const {
+        if (updates == 0) return 0.0f;
+        return static_cast<float>(samples_seen) / static_cast<float>(updates);
+    }
+
     private:
 
     IMU& imu;
-    float imu_velocity;
-    Velocity velocity;
-    float gyro_z_drift;
-    float accel_x_drift;
-    float accel_y_drift;
+    float theta;
+    float gyro_z_bias_raw;
+    unsigned long lost_batches;
+    unsigned long samples_seen = 0;
+    unsigned long updates      = 0;
     bool obsv_init;
 };
 

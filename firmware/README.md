@@ -43,7 +43,7 @@ Two of those five are hooks the task header supplies, which is what keeps
 `loop()` free of any `#if` — see [Task blocks](#task-blocks).
 
 Two rates are decoupled from that: the OLED refreshes every `OLED_REFRESH_MS`
-(≈58 Hz), and the VL6180Xs free-run at `LIDAR_CONTINUOUS_PERIOD_MS` (10 ms), so
+(≈24 Hz), and the VL6180Xs free-run at `LIDAR_CONTINUOUS_PERIOD_MS` (10 ms), so
 `LidarObserver` skips a solve rather than re-solving a reading it has already
 seen.
 
@@ -68,14 +68,31 @@ seen.
 | `mazeWallMap.h` | a `Map`-shaped view of the mapper's wall bits, so `LidarObserver` can localise against discovered walls. Derives every obstacle on demand and stores nothing |
 | `maze_map.h`, `maze_path.h` | **generated** — see below |
 
-The display is four headers, because one panel is shared by three renderers:
+The display is two headers, and one screen serves every task:
 
 | header | owns |
 | --- | --- |
-| `oledDisplay.h` | the only owner of the SSD1306 — one framebuffer, one `begin()`, and the `OLED_REFRESH_MS` throttle. `due()` is *consuming*, so only one renderer may draw per tick |
-| `oled.h` | `OLEDValues` — a page of labelled scalars from `{label, callable}` pairs, in one or two columns |
-| `oledMap.h` | `OLEDMap` — the mapper's belief as a cell grid: walls, visited cells, the robot and its heading, the goal, a progress meter. Read-only against `MazeMapper` |
-| `oledPath.h` | `OLEDPath` — a map as *geometry*: every panel a line at its own angle, every post and cylinder a circle, plus the robot and the route. Templated on the map type, so it draws either `Map<S>` or `MazeWallMap` |
+| `oledDisplay.h` | the only owner of the SSD1306 — one framebuffer, one `begin()`, and the `OLED_REFRESH_MS` throttle. Also `OLEDView`, the mm → px projection |
+| `oledScreen.h` | `OLEDScreen` — the map as *geometry* in a 64 px pane on the left (every panel a line at its own angle, every post and cylinder a filled disc, the route a polyline, the robot a dot and a heading tick), and five rows of values on the right. Templated on the map type, so it draws either `Map<S>` or `MazeWallMap` |
+
+The values pane is the mode, then `X`, `Y` and `T` from the pose, then one
+percentage whose meaning travels with its label — `E` for cells explored, `P`
+for distance along a route:
+
+```
++---------- 64 px ----------+--- 62 px ---+
+| walls as lines, obstacles | EXPL        |  mode
+| as filled circles, the    | X    340    |  mm
+| route as a polyline, the  | Y    128    |  mm
+| robot as a dot and a tick | T    -87    |  deg
+|                           | E    42%    |  metric
++---------------------------+-------------+
+```
+
+Everything on it arrives through an `etl::delegate`, so the screen knows nothing
+about `MotionPlanner`, `MazeRunner` or `MazeMapper`. The map extent it fits to
+comes from `mapBounds()` in `types.h`, which is a property of the map rather than
+of the panel; only the projection that consumes it lives in `oledDisplay.h`.
 
 ### Planners
 
@@ -150,17 +167,22 @@ exist, and supplies the parts that differ:
 | pose source | `LidarObserver` over `MAZE_MAP` | `LidarObserver` over `MazeWallMap` |
 | motion | `MotionPlanner(10, 0.06, 200)` | `MazeRunner` over `PSPlanner(8, 8)` |
 | `taskBegin()` | `#include "maze_path.h"` | `runner.begin()` |
-| `taskRender()` | `OLEDValues` | `OLEDMap` while exploring, `OLEDPath` while racing |
+| `taskRender()` | `OLEDScreen` over `MAZE_MAP`, mode `CV` | `OLEDScreen` over `MazeWallMap`, mode `EXPL`/`HOME`/`EXEC` |
 
 Both build `SensorFusion sf(obs_v, obs_p, 0.1)` and wire `setPrior()` in
 `setup()`. Those two go together: the observer needs the prior to be worth
 anything.
 
-Both also construct an `OLEDPath` that `taskRender()` does not necessarily
-drive — in `task42.h` it is built and fitted but the scalar readout is what
-draws. That is deliberate rather than dead: `OLEDDisplay::due()` is consuming,
-so only one renderer may draw per tick, and the other is kept available for
-bring-up.
+Each builds exactly one `OLEDScreen` and draws it every tick, for every phase
+of the run. There is no renderer to select, which is what `OLEDDisplay::due()`
+being *consuming* asks for: it hands the refresh window to its first caller, so
+two renderers sharing a tick would silently starve whichever asked second.
+
+4.3's mode is the one place the display reads a phase that `MazeRunner` does not
+have. The leg back to the start cell is rule 3 of `MazeMapper::planMove` and sits
+inside `Explore`, so `MazeMapper` exposes `homing()` and `homeProgress()` and
+`screenMode()` folds them in — otherwise the screen would report `EXPL` for the
+whole return trip.
 
 The whole of 4.3's configuration is four lines at the top of `task43.h`:
 

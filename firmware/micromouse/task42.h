@@ -29,23 +29,34 @@
 #include "constants.h"
 #include "maze_map.h"
 #include "observers.h"
-#include "oled.h"
-#include "oledPath.h"
+#include "oledScreen.h"
 #include "planners.h"
 #include "sensorFusion.h"
 #include "types.h"
 
 LidarObserver<Map<MAZE_OBSTACLE_COUNT>> lidar_obsv(lidar, MAZE_MAP);
 
-const std::array<PoseSource, 1> obs_p = {{
-    {&lidar_obsv, FusionWeights::XYPTrust}
+// The lidar for position, the gyro for heading, and neither for the other.
+//
+// XYPTrust on the lidar for the reason set out over LidarObserver: three beams
+// in a corridor constrain y and theta only in combination, so a lateral offset
+// comes back partly as rotation, and that heading is worse than the gyro's.
+//
+// ThetaPTrust on the IMU because heading is all it has -- the x and y in the
+// Pose it returns are placeholders. This is the axis that had no absolute
+// reference at all before: theta was dead reckoning from the fused omega, with
+// nothing on the pose side weighted to correct it, so every error in that omega
+// integrated for the whole run with nothing to pull it back.
+const std::array<PoseSource, 2> obs_p = {{
+    {&lidar_obsv, FusionWeights::XYPTrust},
+    {&imu_obsv, FusionWeights::ThetaPTrust}
 }};
 
-SensorFusion sf(obs_v, obs_p, 0.1);
+SensorFusion sf(obs_v, obs_p, 0.1f, FusionWeights::ThetaCorrectionGain);
 
 Pose fusedPose() { return sf.estimate.pose(); }
 
-MotionPlanner planner(10, 0.06f, 200.0f);
+MotionPlanner planner(10, 0.06f);
 
 // Delegate, so the display does not depend on the planner's type. The
 // equivalent of MazeRunner::raceProgress() on this side.
@@ -53,31 +64,36 @@ float routeProgress() {
     return planner.progress(sf.estimate.pose());
 }
 
-// The exported map is what OLEDPath was written for. Kept constructed and
-// available for bring-up, but not driven by taskRender(): OLEDDisplay::due()
-// is consuming, so only one renderer may draw per tick.
-OLEDPath<Map<MAZE_OBSTACLE_COUNT>> oledPath(
+// Fixed, because this task has exactly one phase. The maze arrived as a
+// photograph and the route was computed from it offline, so there is nothing to
+// explore and nothing to decide: the robot drives the route it was given from
+// the moment it starts. "CV" names where the map came from, which is the only
+// thing distinguishing this run from 4.3's final lap.
+const char* screenMode() {
+    return "CV";
+}
+
+// Distance along the route, from MotionPlanner's own arc-length measure rather
+// than from a step count -- the route here is blended arcs, not poses, so there
+// are no steps to count.
+OLEDMetric screenMetric() {
+    return OLEDMetric{'P', routeProgress()};
+}
+
+// The exported map, drawn as geometry: 85 panels as lines at their own angles,
+// 52 posts and 5 cylinders as filled discs. Everything reaches it through a
+// delegate, so nothing here couples the screen to MotionPlanner.
+//
+// No route overlay. maze_path.h is fed straight to the planner as segments, so
+// there is no polyline to hand over -- and the map the route was cut through is
+// on screen either way.
+OLEDScreen<Map<MAZE_OBSTACLE_COUNT>> screen(
     display,
     MAZE_MAP,
     etl::delegate<Pose()>::create<fusedPose>(),
-    etl::delegate<float()>::create<routeProgress>()
+    etl::delegate<const char*()>::create<screenMode>(),
+    etl::delegate<OLEDMetric()>::create<screenMetric>()
 );
-
-// The scalar readout, which is what this task actually draws.
-const std::array values = {
-    OLEDValue{"x", []() { return sf.estimate.pose().x; }},
-    OLEDValue{"y", []() { return sf.estimate.pose().y; }},
-    OLEDValue{"th", []() { return sf.estimate.pose().theta; }},
-    OLEDValue{"dt", []() { return dt; }},
-    OLEDValue{"pgr", []() { return routeProgress(); }},
-    OLEDValue{"sta",
-              []() {
-                return static_cast<float>(static_cast<uint8_t>(planner.s()));
-              }},
-    OLEDValue{"idx", []() { return static_cast<float>(planner.idx()); }},
-};
-
-OLEDValues oled(display, values);
 
 // Called from setup(), after the shared bring-up and under its "Loading
 // goal..." print, which this is expected to terminate.
@@ -95,7 +111,7 @@ void taskBegin() {
 
     // The map is fixed, so one fit in setup() holds for the whole run.
     Serial.print("Fitting map to display...");
-    if (!oledPath.init()) {
+    if (!screen.init()) {
         Serial.println("\b\b\b [MAP DID NOT FIT]");
     } else {
         Serial.println("\b\b\b [OKAY]");
@@ -110,5 +126,5 @@ Velocity taskUpdate(const Pose& pose, float dt) {
 // to go with it -- is gone from loop(): it duplicated the one inside the
 // renderer, and both now live in OLEDDisplay::due().
 void taskRender() {
-    oled.update();
+    screen.update();
 }

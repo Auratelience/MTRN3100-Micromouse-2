@@ -42,7 +42,7 @@ differential base, with everything but the motors and encoders on one I2C bus.
 | DRV8835 H-bridge | PWM on `xEN`, direction on `xPH` | `pins.h` |
 | MPU6050 IMU | gyro Z only; accelerometer measured and left unused | `imu.h`, `observers.h` |
 | 3 × VL6180X ToF | front / left / right, addresses `0x30`–`0x32`, re-addressed at boot over their GPO pins | `lidar.h` |
-| SSD1306 OLED 128×64 | scalar readout, discovered-maze grid, or map-and-route | `oledDisplay.h`, `oled.h`, `oledMap.h`, `oledPath.h` |
+| SSD1306 OLED 128×64 | one screen for every task: the map on the left, the run's numbers on the right | `oledDisplay.h`, `oledScreen.h` |
 
 Pin assignment lives in one place, `firmware/micromouse/pins.h`. Every tunable
 number lives in one place, `firmware/micromouse/constants.h`, and each one

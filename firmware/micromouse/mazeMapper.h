@@ -103,6 +103,8 @@ class MazeMapper {
         explored     = false;
         broken       = false;
         seenCells    = 0;
+        homeHops     = 0;
+        homeHops0    = 0;
 
         for (uint8_t x = 0; x < N; ++x) {
             for (uint8_t y = 0; y < N; ++y) {
@@ -151,6 +153,29 @@ class MazeMapper {
     // that was fully swept from a run that gave up part way, and the map from
     // the second is not safe to race on.
     bool faulted() const { return broken; }
+
+    // True while the sweep is on its way back to the start cell: planMove has
+    // run out of frontiers worth having and is stepping home under rule 3.
+    //
+    // There is no separate state for that leg -- rules 1 to 3 are all
+    // exploration as far as the runner is concerned -- so this is the only way
+    // to tell a mouse still discovering the maze from one that has finished and
+    // is walking back. A display that could not would report EXPL for the whole
+    // return trip.
+    bool homing() const { return homeHops > 0; }
+
+    // How far along the way home the sweep is, on [0, 1]. Zero unless homing(),
+    // and one notch per cell arrived at, since planMove runs once per arrival.
+    //
+    // Measured against the distance home at the moment the leg began, not
+    // against the maze, so it starts near zero and reaches one on the start
+    // cell. Monotonic: rule 3 always takes a shortest route through explored
+    // cells, so the remaining distance never grows within a leg.
+    float homeProgress() const {
+        if (homeHops == 0 || homeHops0 == 0) return 0.0f;
+        if (homeHops >= homeHops0) return 0.0f;
+        return 1.0f - (static_cast<float>(homeHops) / static_cast<float>(homeHops0));
+    }
 
     // Records what the sensors see from the current cell. Walls are stored on
     // both sides of the boundary, so a wall found from one cell is known from
@@ -211,6 +236,10 @@ class MazeMapper {
     // 3 takes the mouse home. Nothing else has to notice -- there is no separate
     // proof step, because running out of worthwhile frontiers is the proof.
     //
+    // Rule 3 is nonetheless observable, through homing() and homeProgress():
+    // the leg home is the one stretch of a sweep where the mouse is not
+    // discovering anything, and a caller reporting on the run wants to say so.
+    //
     // Does not move the mapper. Call commitMove once the robot has arrived.
     bool planMove(Direction& move) {
         movePending = false;
@@ -226,14 +255,32 @@ class MazeMapper {
             if (hasWall(current, d)) continue;
             if (visited(next)) continue;
             if (!worthExploring(next)) continue;
+            homeHops = 0;
             return setPending(move, d);
         }
 
         Direction step;
-        if (firstStepToward(Target::Frontier, step)) return setPending(move, step);
+        uint16_t hops = 0;
+        if (firstStepToward(Target::Frontier, step, hops)) {
+            homeHops = 0;
+            return setPending(move, step);
+        }
 
         if (!sameCell(current, start)) {
-            if (firstStepToward(Target::Start, step)) return setPending(move, step);
+            if (firstStepToward(Target::Start, step, hops)) {
+                // The homing leg has begun, or is one cell further along. hops
+                // is the distance still to run; the first one is kept as the
+                // denominator, so homeProgress() is measured against the route
+                // home the mouse actually faced rather than against a maze
+                // dimension it may never have crossed.
+                //
+                // Never re-seeded once set: rules 1 and 2 clear it, so a
+                // frontier the sweep changes its mind about restarts the
+                // measure rather than rescaling one already in progress.
+                homeHops = hops;
+                if (homeHops0 == 0) homeHops0 = hops;
+                return setPending(move, step);
+            }
 
             // Cannot happen: every boundary the robot drove through is recorded
             // open, a route home only has to cross those, and clearWallBetween
@@ -241,11 +288,16 @@ class MazeMapper {
             // the map contradicts the drive that built it, which is not a map
             // to race on -- so stop, and flag it rather than reporting a
             // finished sweep.
+            homeHops = 0;
             broken   = true;
             explored = true;
             return false;
         }
 
+        // Standing where it began, with nothing left worth exploring: the
+        // sweep is over and the homing leg with it, so homing() stops
+        // answering true before doneExploring() starts.
+        homeHops = 0;
         explored = true;
         return false;
     }
@@ -546,15 +598,30 @@ class MazeMapper {
     // predecessor, because the answer is then ready the moment the target is
     // reached -- this runs once per arrival and only ever needs the next move,
     // never the whole path. False if no target is reachable.
-    bool firstStepToward(Target what, Direction& out) const {
+    //
+    // `hops` comes back as the length of that route in cells, which is what
+    // homeProgress() is measured in. It rides along on the same search rather
+    // than costing a second one: the sweep is two bytes per cell wider for it
+    // (72 bytes at N = 6, 162 at N = 9) against the ~490 this already borrows.
+    //
+    // uint16_t and not a byte, though a byte holds every route a maze up to
+    // 16 cells a side can contain: the width that overflows is not the one that
+    // runs out of stack, so the cheap guard is the wider counter rather than a
+    // bound on N nobody would think to check.
+    bool firstStepToward(Target what, Direction& out, uint16_t& hops) const {
         constexpr uint8_t Unseen = 0xFF;
         uint8_t firstMove[N][N];
+        uint16_t depth[N][N];
         Cell queue[MAX_CELLS];
         uint16_t head = 0;
         uint16_t tail = 0;
+        hops          = 0;
 
         for (uint8_t x = 0; x < N; ++x) {
-            for (uint8_t y = 0; y < N; ++y) firstMove[x][y] = Unseen;
+            for (uint8_t y = 0; y < N; ++y) {
+                firstMove[x][y] = Unseen;
+                depth[x][y]     = 0;
+            }
         }
 
         // Marks the cell the robot is on as seen. Never read as a move: a
@@ -579,8 +646,10 @@ class MazeMapper {
 
                 const uint8_t step = fromSource ? directionIndex(d) : firstMove[u.x][u.y];
                 firstMove[next.x][next.y] = step;
+                depth[next.x][next.y]     = static_cast<uint16_t>(depth[u.x][u.y] + 1);
                 if (isTarget(what, next)) {
-                    out = directionFromIndex(step);
+                    out  = directionFromIndex(step);
+                    hops = depth[next.x][next.y];
                     return true;
                 }
                 queue[tail++] = next;
@@ -685,6 +754,13 @@ class MazeMapper {
     bool explored         = false;
     bool started          = false;
     bool broken           = false;
+
+    // The homing leg, as cells still to run and as the cells it started with.
+    // Zero in homeHops means the sweep is not homing, which is why every exit
+    // from planMove that is not rule 3 clears it; homeHops0 is the denominator
+    // and survives until begin().
+    uint16_t homeHops  = 0;
+    uint16_t homeHops0 = 0;
 };
 
 #pragma GCC pop_options

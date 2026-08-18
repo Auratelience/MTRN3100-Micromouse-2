@@ -25,7 +25,7 @@
 // The two are alternatives, not layers: MotionPlanner's segment array alone is
 // about 10 kB of RAM. Everything below this line is shared, and the selected
 // header is included further down, once the objects it builds on exist.
-#define TASK 42
+#define TASK 43
 
 #if TASK != 42 && TASK != 43
 #error "TASK must be 42 or 43"
@@ -71,13 +71,24 @@ LIDAR lidar(std::array<LidarSensor*, 3>{&frontLS, &leftLS, &rightLS});
 // The velocity side of the fusion is the same either way. The pose side is not
 // -- it is the map the observer localises against that differs -- so obs_p and
 // the SensorFusion built from both live in the task header.
-const std::array<VelocitySource, 2> obs_v = {{
-    {&wheel_obsv, ObserverVTrust{1.0f, 0.2f}},
-    {&imu_obsv, FusionWeights::OmegaVTrust}
+//
+// The wheels alone. The gyro used to be blended in here as an omega, at four
+// times the wheels' weight in heading, which is what made theta depend on the
+// control loop's dt: ModelObserver integrates fused omega against whatever the
+// loop period happened to be, and an OLED frame makes that period jump by an
+// order of magnitude with no gyro sample taken across the gap. It is a pose
+// source now -- see ImuObserver -- and integrates on the sensor's own clock.
+//
+// So current.omega, which is what MotionController closes its per-wheel PIDs
+// on, is now wheel-derived end to end. That is what those PIDs were written
+// for; it does also mean the loop no longer sees body rotation directly, so
+// wheel slip is rejected by the pose estimate rather than by the controller.
+const std::array<VelocitySource, 1> obs_v = {{
+    {&wheel_obsv, FusionWeights::DefaultVTrust}
 }};
 
-// Loop period, seconds. Defined here rather than beside the controller because
-// the `values` readout in the task header captures it.
+// Loop period, seconds. At file scope rather than local to loop() so a task
+// header or a trace can read the rate the control loop is actually running at.
 float dt = 0;
 
 OLEDDisplay display;
@@ -98,7 +109,7 @@ unsigned long previous_time = 0;
 unsigned long current_time = 0;
 
 void setup() {
-    Serial.begin(9600);
+    Serial.begin(115200); // DIAGNOSTIC: was 9600
     delay(1000);
     Serial.println("Beginning setup:");
 
@@ -111,7 +122,7 @@ void setup() {
     rightMotor.init();
     Serial.println("\b\b\b [OKAY]");
 
-    Serial.print("Initialising IMU Observer (V)...");
+    Serial.print("Initialising IMU Observer (P)...");
     if (!imu.init(IMU::GyroScale::DPS_1000, IMU::AccelScale::G_4, IMU::LowPassFrequency::HZ_44)) {
         Serial.println("\b\b\b [MPU6050 INIT FAILED]");
     } else {
@@ -128,9 +139,14 @@ void setup() {
         Serial.println("\b\b\b [VL6180X INIT FAILED]");
     } else {
         lidar_obsv.setPrior(decltype(lidar_obsv)::PoseFunc::create<fusedPose>());
-        sf.set(Pose{0, 0, 0});
         Serial.println("\b\b\b [OKAY]");
     }
+
+    // Seeds every observer that holds an absolute pose, ImuObserver's heading
+    // included, so it has to run whatever the lidar did. It used to sit inside
+    // the branch above, which was harmless only while nothing on the pose side
+    // integrated anything.
+    sf.set(Pose{0, 0, 0});
 
     Serial.print("Initialising OLED...");
     if (!display.init()) {
@@ -158,16 +174,54 @@ void loop() {
 
     i2cRepairer.update();
 
-    // SensorFusion::update() steps its own velocity/pose observers
     sf.update(dt);
     Pose pose = sf.estimate.pose();
     Velocity current = sf.estimate.velocity();
-
     Velocity desired = taskUpdate(pose, dt);
-
     mc.update(desired, current, dt);
 
     taskRender();
+
+    // DIAGNOSTIC: gyro read failures and bus recoveries, rate limited so the
+    // report cannot itself stall the loop it is measuring.
+    {
+        static unsigned long reported = 0;
+        static unsigned long last_report_ms = 0;
+        const unsigned long failures = imu.failures();
+        if (failures != reported && millis() - last_report_ms >= 200) {
+            Serial.print(F("imu dropped "));
+            Serial.print(failures - reported);
+            Serial.print(F(" reads (total "));
+            Serial.print(failures);
+            Serial.print(F("), fifo losses "));
+            Serial.print(imu.fifoLosses());
+            Serial.print(F(", i2c recoveries "));
+            Serial.println(i2cRepairer.recoveries());
+            reported       = failures;
+            last_report_ms = millis();
+        }
+    }
+
+    // DIAGNOSTIC: FIFO samples per control cycle, which is the check on
+    // CONTROL_LOOP_NOMINAL_HZ. Capped at a few reports rather than left
+    // running: the figure is a cumulative mean and settles within the first
+    // couple, and a periodic Serial write is a few ms of exactly the loop
+    // stall this whole path exists to stop mattering. Delete freely.
+    {
+        static unsigned long last_rate_report_ms = 0;
+        static uint8_t rate_reports = 0;
+        if (rate_reports < 5 && millis() - last_rate_report_ms >= 2000) {
+            Serial.print(F("imu "));
+            Serial.print(imu_obsv.samplesPerUpdate(), 2);
+            Serial.print(F(" samples/cycle at "));
+            Serial.print(IMU_SAMPLE_RATE_HZ);
+            Serial.print(F(" Hz (CONTROL_LOOP_NOMINAL_HZ "));
+            Serial.print(CONTROL_LOOP_NOMINAL_HZ);
+            Serial.println(F(")"));
+            last_rate_report_ms = millis();
+            ++rate_reports;
+        }
+    }
 
     previous_time = current_time;
 }

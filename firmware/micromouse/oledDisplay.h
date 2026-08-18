@@ -15,10 +15,10 @@
 // The one owner of the panel.
 //
 // There is exactly one SSD1306 on the bus, so there is exactly one of these.
-// Renderers (OLEDValues, OLEDMap, OLEDPath) borrow it by reference and draw
-// through gfx(); none of them owns a framebuffer, calls begin(), or holds the
-// refresh throttle. Three owners would mean three 1 kB framebuffers malloc'd
-// for the same panel and three begin() calls on address 0x3C.
+// OLEDScreen borrows it by reference and draws through gfx(); it does not own a
+// framebuffer, call begin(), or hold the refresh throttle. Two owners would mean
+// two 1 kB framebuffers malloc'd for the same panel and two begin() calls on
+// address 0x3C.
 class OLEDDisplay {
     public:
 
@@ -169,33 +169,14 @@ class OLEDView {
 // A progress delegate onto [0, 1].
 //
 // Never trust the delegate: it divides by a count that can be zero or can be
-// exceeded, so it can hand back a NaN or a value off either end. Both the bar
-// and the percentage readout run it, and a bar that clamped while the number
-// beside it did not would disagree on screen.
+// exceeded, so it can hand back a NaN or a value off either end. The percentage
+// readout would print "-2147483648%" for the first of those and run past its
+// ten-character pane for the rest.
 inline float clampFraction(float fraction) {
     if (!isfinite(fraction)) return 0.0f;
     if (fraction < 0.0f) return 0.0f;
     if (fraction > 1.0f) return 1.0f;
     return fraction;
-}
-
-// The completion meter both map renderers carry, along the bottom of the text
-// pane: a one-pixel outline with a fill proportional to `fraction`. An
-// out-of-range fill would run the rectangle off the panel, hence the clamp.
-inline void drawProgressBar(OLEDDisplay& display, float fraction) {
-    fraction = clampFraction(fraction);
-
-    const int16_t x = OLED_TEXT_PANE_X;
-    const int16_t y = static_cast<int16_t>(display.height() - OLED_BAR_H - OLED_BAR_MARGIN);
-    const int16_t w = static_cast<int16_t>(display.width() - OLED_TEXT_PANE_X - OLED_BAR_MARGIN);
-    if (w <= 2) return;
-
-    Adafruit_SSD1306& g = display.gfx();
-    g.drawRect(x, y, w, OLED_BAR_H, SSD1306_WHITE);
-
-    const int16_t inner = static_cast<int16_t>(w - 2);
-    const int16_t fill  = static_cast<int16_t>(lroundf(fraction * static_cast<float>(inner)));
-    if (fill > 0) g.fillRect(x + 1, y + 1, fill, OLED_BAR_H - 2, SSD1306_WHITE);
 }
 
 // NOLINTEND(misc-definitions-in-headers)

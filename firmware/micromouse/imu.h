@@ -40,6 +40,24 @@ class IMU {
         HZ_5   = 6
     };
 
+    // A run of Z-gyro samples taken off the FIFO, summed in raw LSB.
+    //
+    // The sum and not the mean, deliberately. Every sample in it covers
+    // exactly samplePeriod() seconds, so the batch integrates to
+    //
+    //     dtheta = sum * gyroRadPerLsb() * samplePeriod()
+    //
+    // whatever the caller's loop was doing while they accumulated. That is the
+    // whole reason for reading the FIFO rather than the data registers: the
+    // sensor keeps sampling into its own buffer through a 23 ms OLED transfer,
+    // so the samples taken during one are still here to be drained afterwards
+    // instead of being lost between two reads.
+    struct GyroBatch {
+        int32_t sum;    // raw LSB, zero-rate offset NOT removed
+        uint16_t count; // samples in sum
+        bool lost;      // samples went missing; see drainGyroZ()
+    };
+
     IMU(uint8_t address = IMU_ADDRESS) : address(address) {}
 
     // Sane defaults
@@ -51,18 +69,142 @@ class IMU {
         Wire.beginTransmission(address);
         if (Wire.endTransmission() != 0) return false;
 
-        // Set up IMU
-        writeReg(PWR_MGMT_1, 0x00);
+        // Wake, then move off the internal 8 MHz RC oscillator and onto the
+        // PLL locked to the X gyro, which is what the datasheet recommends.
+        // Not cosmetic here: drainGyroZ() below converts a sample count into a
+        // time by multiplying by an assumed period, so however far the sensor's
+        // clock wanders is a scale error on every angle this class reports.
+        // The RC oscillator wanders with temperature; the PLL reference does
+        // not, to anything like the same degree.
+        writeReg(PWR_MGMT_1, PWR_CLKSEL_INTERNAL);
+        delay(IMU_CLOCK_SETTLE_MS);
+        writeReg(PWR_MGMT_1, PWR_CLKSEL_PLL_XGYRO);
+        delay(IMU_CLOCK_SETTLE_MS);
+
         writeReg(GYRO_CONFIG, static_cast<uint8_t>(gyro));
         writeReg(ACCEL_CONFIG, static_cast<uint8_t>(accel));
         writeReg(CONFIG, static_cast<uint8_t>(dlpf));
+        writeReg(SMPLRT_DIV, IMU_SAMPLE_RATE_DIVIDER);
 
         gyroscopicSensitivity    = gyroSensitivity(gyro);
         accelerometerSensitivity = accelSensitivity(accel);
+        gyro_rad_per_lsb = static_cast<float>(DEG_TO_RAD) / gyroscopicSensitivity;
+
+        // The rate SMPLRT_DIV divides is 8 kHz only when the DLPF is bypassed
+        // altogether; any real filter setting drops it to 1 kHz. Worth deriving
+        // rather than assuming, because getting it wrong is a silent factor of
+        // eight on the heading.
+        const float base = (dlpf == LowPassFrequency::HZ_260) ? 8000.0f : 1000.0f;
+        sample_period    = (1.0f + static_cast<float>(IMU_SAMPLE_RATE_DIVIDER)) / base;
+
+        // Z gyro only. The other five axes and the temperature would fill the
+        // FIFO six times as fast, and nothing integrates them -- which is what
+        // buys the depth IMU_SAMPLE_RATE_DIVIDER is asserted against.
+        writeReg(FIFO_EN, FIFO_EN_ZG);
+        writeReg(USER_CTRL, USER_CTRL_FIFO_ENABLE);
+        fifo_ready = true;
+        resetFifo();
 
         return true;
     }
 
+    // Seconds covered by one FIFO sample. Fixed by SMPLRT_DIV and the DLPF, and
+    // independent of anything the control loop does.
+    float samplePeriod() const {
+        return sample_period;
+    }
+
+    // Radians per second per raw LSB, from the configured full-scale range.
+    // Precomputed because DEG_TO_RAD is a double literal and this part has no
+    // double-precision unit -- deriving it here would put a soft-float divide
+    // in the integration path.
+    float gyroRadPerLsb() const {
+        return gyro_rad_per_lsb;
+    }
+
+    // Empties the FIFO and returns what was in it.
+    //
+    // The `lost` flag means samples are missing and the batch is empty: either
+    // the FIFO overflowed and dropped them off the front, or it came back with
+    // an odd byte count. The second is the more dangerous of the two and the
+    // reason for the check -- a read pointer that is not on a sample boundary
+    // makes every subsequent pair straddle two samples, which decodes as
+    // large values of arbitrary sign rather than as anything recognisably
+    // wrong. Resetting and admitting the gap beats integrating that.
+    GyroBatch drainGyroZ() {
+        GyroBatch batch = {0, 0, false};
+        if (!fifo_ready) return batch;
+
+        uint8_t status = 0;
+        if (!readByte(INT_STATUS, status)) return batch;
+
+        uint16_t count = 0;
+        if (!readUint16(FIFO_COUNTH, count)) return batch;
+
+        // A full FIFO is one sample away from having dropped one, so it is
+        // treated as though it already had.
+        if ((status & INT_STATUS_FIFO_OFLOW) || count >= IMU_FIFO_CAPACITY_BYTES || (count & 1u)) {
+            resetFifo();
+            ++fifo_losses;
+            batch.lost = true;
+            return batch;
+        }
+
+        while (count >= 2) {
+            const uint8_t want =
+                (count > IMU_FIFO_CHUNK_BYTES) ? IMU_FIFO_CHUNK_BYTES : static_cast<uint8_t>(count);
+
+            Wire.beginTransmission(address);
+            Wire.write(FIFO_R_W);
+            if (Wire.endTransmission(false) != 0) {
+                ++read_failures;
+                break;
+            }
+            Wire.requestFrom(address, want);
+
+            uint8_t got = 0;
+            while (Wire.available() >= 2) {
+                const uint8_t hi = static_cast<uint8_t>(Wire.read());
+                const uint8_t lo = static_cast<uint8_t>(Wire.read());
+                batch.sum += static_cast<int16_t>(static_cast<uint16_t>(hi << 8) | lo);
+                ++batch.count;
+                got = static_cast<uint8_t>(got + 2);
+            }
+
+            // A short read is survivable: the FIFO's read pointer only advanced
+            // by what actually came out, so the next drain resumes cleanly. A
+            // single trailing byte is not, for the alignment reason above.
+            if (Wire.available() != 0) {
+                while (Wire.available()) Wire.read();
+                ++read_failures;
+                resetFifo();
+                ++fifo_losses;
+                batch.lost  = true;
+                batch.sum   = 0;
+                batch.count = 0;
+                return batch;
+            }
+
+            if (got == 0) {
+                ++read_failures;
+                break;
+            }
+            count = static_cast<uint16_t>(count - got);
+        }
+
+        return batch;
+    }
+
+    // Discards whatever is buffered and restarts the stream on a sample
+    // boundary. FIFO_RESET self-clears, and has to be written with the enable
+    // bit still set or the FIFO comes back disabled.
+    void resetFifo() {
+        if (!fifo_ready) return;
+        writeReg(USER_CTRL, USER_CTRL_FIFO_ENABLE | USER_CTRL_FIFO_RESET);
+    }
+
+    // Direct register reads, kept for bring-up and diagnostics. Heading no
+    // longer comes through here -- see drainGyroZ().
     float gyroX() {
         return toRadPerSec(gyroXAvg.push(readWord(GYRO_XOUT_H)));
     }
@@ -87,18 +229,44 @@ class IMU {
         return toMPerSec2(accelZAvg.push(readWord(ACCEL_ZOUT_H)));
     }
 
+    // DIAGNOSTIC: failed reads since boot. A direct read failure returns 0,
+    // which the rolling average cannot tell from "not rotating", so this
+    // counter is the only way to see one happen.
+    unsigned long failures() const {
+        return read_failures;
+    }
+
+    // DIAGNOSTIC: FIFO resets forced by an overflow or a lost alignment, each
+    // of which threw away a batch of heading. Should stay at zero.
+    unsigned long fifoLosses() const {
+        return fifo_losses;
+    }
+
     private:
 
-    static constexpr uint8_t PWR_MGMT_1   = 0x6B;
+    static constexpr uint8_t SMPLRT_DIV   = 0x19;
     static constexpr uint8_t CONFIG       = 0x1A;
     static constexpr uint8_t GYRO_CONFIG  = 0x1B;
     static constexpr uint8_t ACCEL_CONFIG = 0x1C;
+    static constexpr uint8_t FIFO_EN      = 0x23;
+    static constexpr uint8_t INT_STATUS   = 0x3A;
     static constexpr uint8_t ACCEL_XOUT_H = 0x3B;
     static constexpr uint8_t ACCEL_YOUT_H = 0x3D;
     static constexpr uint8_t ACCEL_ZOUT_H = 0x3F;
     static constexpr uint8_t GYRO_XOUT_H  = 0x43;
     static constexpr uint8_t GYRO_YOUT_H  = 0x45;
     static constexpr uint8_t GYRO_ZOUT_H  = 0x47;
+    static constexpr uint8_t USER_CTRL    = 0x6A;
+    static constexpr uint8_t PWR_MGMT_1   = 0x6B;
+    static constexpr uint8_t FIFO_COUNTH  = 0x72;
+    static constexpr uint8_t FIFO_R_W     = 0x74;
+
+    static constexpr uint8_t PWR_CLKSEL_INTERNAL   = 0x00;
+    static constexpr uint8_t PWR_CLKSEL_PLL_XGYRO  = 0x01;
+    static constexpr uint8_t FIFO_EN_ZG            = 0x10;
+    static constexpr uint8_t INT_STATUS_FIFO_OFLOW = 0x10;
+    static constexpr uint8_t USER_CTRL_FIFO_ENABLE = 0x40;
+    static constexpr uint8_t USER_CTRL_FIFO_RESET  = 0x04;
 
     static constexpr float GRAVITY = 9.80665f;
 
@@ -124,8 +292,17 @@ class IMU {
     };
 
     uint8_t address;
-    float gyroscopicSensitivity;
-    float accelerometerSensitivity;
+    // Defaulted rather than left indeterminate: a bus that does not answer
+    // returns from init() before these are set, and nothing downstream should
+    // be reading garbage even on a path that ought not to be reached.
+    float gyroscopicSensitivity    = 32.8f;
+    float accelerometerSensitivity = 8192.0f;
+    float gyro_rad_per_lsb         = 0.0f;
+    float sample_period            = 0.0f;
+    bool fifo_ready                = false;
+
+    unsigned long read_failures = 0;
+    unsigned long fifo_losses   = 0;
 
     RollingAverage gyroXAvg, gyroYAvg, gyroZAvg;
     RollingAverage accelXAvg, accelYAvg, accelZAvg;
@@ -165,14 +342,31 @@ class IMU {
         Wire.endTransmission();
     }
 
-    int16_t readWord(uint8_t reg) {
+    bool readByte(uint8_t reg, uint8_t& out) {
         Wire.beginTransmission(address);
         Wire.write(reg);
-        if (Wire.endTransmission(false) != 0) return 0;
+        if (Wire.endTransmission(false) != 0) { ++read_failures; return false; }
+        Wire.requestFrom(address, static_cast<uint8_t>(1));
+        if (Wire.available() < 1) { ++read_failures; return false; }
+        out = static_cast<uint8_t>(Wire.read());
+        return true;
+    }
+
+    bool readUint16(uint8_t reg, uint16_t& out) {
+        Wire.beginTransmission(address);
+        Wire.write(reg);
+        if (Wire.endTransmission(false) != 0) { ++read_failures; return false; }
         Wire.requestFrom(address, static_cast<uint8_t>(2));
-        if (Wire.available() < 2) return 0;
-        uint8_t hi = static_cast<uint8_t>(Wire.read());
-        uint8_t lo = static_cast<uint8_t>(Wire.read());
-        return static_cast<int16_t>(static_cast<uint16_t>(hi << 8) | lo);
+        if (Wire.available() < 2) { ++read_failures; return false; }
+        const uint8_t hi = static_cast<uint8_t>(Wire.read());
+        const uint8_t lo = static_cast<uint8_t>(Wire.read());
+        out              = static_cast<uint16_t>((static_cast<uint16_t>(hi) << 8) | lo);
+        return true;
+    }
+
+    int16_t readWord(uint8_t reg) {
+        uint16_t raw = 0;
+        if (!readUint16(reg, raw)) return 0;
+        return static_cast<int16_t>(raw);
     }
 };

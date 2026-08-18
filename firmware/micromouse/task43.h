@@ -32,9 +32,7 @@
 #include "mazeRunner.h"
 #include "mazeWallMap.h"
 #include "observers.h"
-#include "oled.h"
-#include "oledMap.h"
-#include "oledPath.h"
+#include "oledScreen.h"
 #include "planners.h"
 #include "sensorFusion.h"
 #include "types.h"
@@ -54,7 +52,7 @@
 // maze_map.h describes its 10x10 post lattice, and ten post lines bound nine
 // cells, with cell centres from -180 mm to 1260 mm on both axes. Set this to 9
 // to explore the full deck; nothing else has to change.
-constexpr uint8_t MAZE_SIZE = 5;
+constexpr uint8_t MAZE_SIZE = 6;
 
 using mazeMapper = MazeMapper<MAZE_SIZE>;
 
@@ -64,10 +62,10 @@ using mazeMapper = MazeMapper<MAZE_SIZE>;
 // Cells are the grid convention from types.h -- (x, y) with x forward and y
 // left, so North steps +x and West steps +y. Start in a corner facing North,
 // goal at (2, 4).
-PSPlanner psp(8.0f, 8.0f);
+PSPlanner psp(8.0f, 10.0f);
 mazeMapper::Cell startCell = {0, 0};
 Direction startHeading     = North;
-mazeMapper::Cell goalCell  = {2, 4};
+mazeMapper::Cell goalCell  = {0, 4};
 
 MazeRunner<MAZE_SIZE> runner(
     lidar,
@@ -80,48 +78,80 @@ MazeRunner<MAZE_SIZE> runner(
 MazeWallMap<MAZE_SIZE> wallMap(runner.map());
 LidarObserver<MazeWallMap<MAZE_SIZE>> lidar_obsv(lidar, wallMap);
 
-const std::array<PoseSource, 1> obs_p = {{
-    {&lidar_obsv, FusionWeights::XYPTrust}
+// The lidar for position, the gyro for heading, and neither for the other.
+//
+// XYPTrust on the lidar for the reason set out over LidarObserver: three beams
+// in a corridor constrain y and theta only in combination, so a lateral offset
+// comes back partly as rotation, and that heading is worse than the gyro's.
+//
+// ThetaPTrust on the IMU because heading is all it has -- the x and y in the
+// Pose it returns are placeholders. This is the axis that had no absolute
+// reference at all before: theta was dead reckoning from the fused omega, with
+// nothing on the pose side weighted to correct it, so every error in that omega
+// integrated for the whole run with nothing to pull it back.
+const std::array<PoseSource, 2> obs_p = {{
+    {&lidar_obsv, FusionWeights::XYPTrust},
+    {&imu_obsv, FusionWeights::ThetaPTrust}
 }};
 
-SensorFusion sf(obs_v, obs_p, 0.1);
+SensorFusion sf(obs_v, obs_p, 0.1f, FusionWeights::ThetaCorrectionGain);
 
 Pose fusedPose() { return sf.estimate.pose(); }
 
-// Delegates, so neither display depends on the runner's type.
-float exploreProgress() {
-    return runner.exploreProgress();
+using runnerState = MazeRunner<MAZE_SIZE>::State;
+
+// The phase of the run, in four letters.
+//
+// HOME is not one of MazeRunner's states -- the leg back to the start cell is
+// rule 3 of MazeMapper::planMove and lives inside Explore -- but it is the one
+// stretch where the robot is retracing rather than discovering, and reporting it
+// as EXPL would leave the display claiming to explore for the whole return trip.
+//
+// FAULT is kept distinct from DONE deliberately. A mapper that catches its own
+// state going inconsistent stops the run and reports Done like a finished sweep,
+// so a display that folded the two together would show a run that gave up as a
+// completed one -- which is exactly the failure this screen exists to catch.
+const char* screenMode() {
+    switch (runner.state()) {
+        case runnerState::Init:    return "INIT";
+        case runnerState::Explore: return runner.map().homing() ? "HOME" : "EXPL";
+        case runnerState::Plan:    return "PLAN";
+        case runnerState::Race:    return "EXEC";
+        default:                   return runner.map().faulted() ? "FAULT" : "DONE";
+    }
 }
 
-float raceProgress() {
-    return runner.raceProgress();
+// What the percentage counts, which depends on what the robot is doing:
+//
+//   EXPL  cells of the grid stood in. Under-reads whenever part of the maze is
+//         walled off, because how much is reachable is not known until the
+//         sweep ends -- a meter, not a completion test.
+//   HOME  distance run of the distance home when the leg began, one notch per
+//         cell. Not the planner's own progress: the runner re-seeds it per cell
+//         during exploration, so that figure resets every step.
+//   else  poses driven of the poses in the route, one notch per instruction.
+OLEDMetric screenMetric() {
+    if (runner.state() == runnerState::Explore) {
+        if (runner.map().homing()) return OLEDMetric{'P', runner.map().homeProgress()};
+        return OLEDMetric{'E', runner.exploreProgress()};
+    }
+    return OLEDMetric{'P', runner.raceProgress()};
 }
 
-OLEDMap<MAZE_SIZE> oledMap(display, runner.map(), etl::delegate<float()>::create<exploreProgress>());
-
-OLEDPath<MazeWallMap<MAZE_SIZE>> oledPath(
+// The discovered map, drawn as geometry for the whole run: walls appear as
+// panels the moment the mapper records them, and the robot's pose and heading
+// are on screen from the first tick rather than only once it starts racing.
+//
+// wallMap and not runner.map() -- the same walls, but as the panels and posts
+// the lidar localises against, so what is drawn is the geometry the fix was
+// taken from.
+OLEDScreen<MazeWallMap<MAZE_SIZE>> screen(
     display,
     wallMap,
     etl::delegate<Pose()>::create<fusedPose>(),
-    etl::delegate<float()>::create<raceProgress>()
+    etl::delegate<const char*()>::create<screenMode>(),
+    etl::delegate<OLEDMetric()>::create<screenMetric>()
 );
-
-// Kept constructed and available for bring-up, but not driven by taskRender():
-// OLEDDisplay::due() is consuming, so only one renderer may draw per tick.
-const std::array values = {
-    OLEDValue{"x", []() { return sf.estimate.pose().x; }},
-    OLEDValue{"y", []() { return sf.estimate.pose().y; }},
-    OLEDValue{"th", []() { return sf.estimate.pose().theta; }},
-    OLEDValue{"dt", []() { return dt; }},
-    OLEDValue{"pgr", []() { return raceProgress(); }},
-    OLEDValue{"sta",
-              []() {
-                return static_cast<float>(static_cast<uint8_t>(runner.state()));
-              }},
-    OLEDValue{"bms", []() { return static_cast<float>(lidar_obsv.beams()); }},
-};
-
-OLEDValues oled(display, values);
 
 // Called from setup(), after the shared bring-up and under its "Loading
 // goal..." print, which this is expected to terminate.
@@ -136,7 +166,7 @@ void taskBegin() {
     // pane is fitted to. Walls found later fall inside it, so one fit holds
     // for the whole run.
     Serial.print("Fitting map to display...");
-    if (!oledPath.init()) {
+    if (!screen.init()) {
         Serial.println("\b\b\b [MAP DID NOT FIT]");
     } else {
         Serial.println("\b\b\b [OKAY]");
@@ -149,13 +179,13 @@ Velocity taskUpdate(const Pose& pose, float dt) {
     return runner.update(pose, dt);
 }
 
-// One renderer per tick: OLEDDisplay::due() is consuming, so drawing two would
-// starve whichever asked second.
+// One screen for every phase, so there is no renderer to select and no risk of
+// starving one: OLEDDisplay::due() is consuming, and only one thing draws.
+//
+// The route is handed over unconditionally. It is empty until Plan has run, and
+// a route shorter than two points draws nothing, so this needs no idea of which
+// phase the run is in.
 void taskRender() {
-    if (runner.racing()) {
-        oledPath.setRoute(runner.route());
-        oledPath.update();
-    } else {
-        oledMap.update();
-    }
+    screen.setRoute(runner.route());
+    screen.update();
 }
