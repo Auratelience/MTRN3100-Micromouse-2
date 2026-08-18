@@ -7,8 +7,11 @@ python3 run.py                            # drive the installed maze_path.h
 python3 run.py --viz --open               # ...and watch it
 python3 run.py task34                     # a retained TASK 3.x regression scenario
 python3 run.py --plan 5 --from 1,1 --to 4,6   # plan a fresh path first, then drive it
-python3 -m unittest discover -s . -t ..   # 256 tests, from the repo root
 ```
+
+There are 257 tests. `unittest discover` cannot load them — see the note below —
+so the root [`README.md`](../README.md#run-the-tests) carries the explicit loader
+to run them with.
 
 Stdlib only. `--plan` is the one exception and it runs path-planning in
 path-planning's own uv environment, not this one.
@@ -21,7 +24,7 @@ this directory reaches `sys.path` — if `run.py` dies importing `enum`, run it 
 accept a namespace package to name a directory with a hyphen in it: CPython 3.11
 through 3.14 do not, and answer *Start directory is not importable*. The root
 [`README.md`](../README.md#run-the-tests) carries an explicit loader that runs
-the same 256 tests without either problem.
+all 257 tests without either problem.
 
 ## What is a port and what is not
 
@@ -43,7 +46,7 @@ sketch](#where-the-sim-departs-from-the-sketch).
 | `fusion.py` | `sensorFusion.h` | see below |
 | `lidar.py` | `lidar.h` | only the VL6180X's *observable* behaviour: 10 ms period, 2 mm quantisation, the min/max clamps |
 | `runner.py` | `setup()` + `loop()` | |
-| `scenarios.py` | the TASK comment blocks | `planned` is the sketch's only live block; `task31`–`task34` are retained regression scenarios |
+| `scenarios.py` | the sketch's task configurations | `planned` mirrors `task42.h`; `task31`–`task34` are retained regression scenarios. Nothing here ports `task43.h` — the sim has no `MazeMapper` or `MazeRunner` |
 
 Sim-only, with no firmware counterpart: `plant.py` (ground truth — the only
 place true state exists), `world.py`, `mapper.py`, `png.py`, `maze_header.py`,
@@ -78,8 +81,8 @@ localises against. That is how you ask what a stale export costs.
 `xTotal`/`yTotal` started at `0.0f` — so the model's vote was a vote for the
 origin rather than for where dead reckoning said the robot was. A pose source
 agreeing *exactly* with dead reckoning still dragged the estimate toward (0, 0)
-by `g/(1+t)` of the remaining distance every tick: 17% per control loop at the
-`.ino`'s `t = 0.2`, `g = 0.2`. At 1 kHz the position was pinned within
+by `g/(1+t)` of the remaining distance every tick: 17% per control loop at
+`t = 0.2`, `g = 0.2`. At 1 kHz the position was pinned within
 milliseconds. `theta` escaped it — its numerator accumulates deltas, and the
 model's own delta really is zero.
 
@@ -97,8 +100,6 @@ knowing:
   keeps dead reckoning. Under `XYPTrust` (1, 1, 0) that is `theta`, every tick —
   heading on the robot is pure dead reckoning by construction, not by accident.
 
-`firmware-ds/lidar/sensorFusion.h` still carries the original.
-
 **`FrontLidarObserver` ignores its mount offset.** It writes `pose.x =
 -getReading(Front)`, but the front sensor sits 57 mm ahead of the robot centre
 (`LIDAR_MOUNT_FRONT_X`), so the pose it reports is 57 mm short. Visible as the
@@ -107,23 +108,35 @@ wrong as a pose. Still unfixed everywhere.
 
 ## Where the sim departs from the sketch
 
-Two places, both deliberate, both worth re-checking when the `.ino` changes:
+Two places, both worth re-checking when the `.ino` changes:
 
-**Pose correction gain.** `micromouse.ino` currently builds `SensorFusion
-sf(obs_v, obs_p, 0)`. A gain of `0` makes `fusePose` return dead reckoning
-unchanged, so mirroring it would compute the lidar fix and multiply it by zero —
-every localisation scenario here would quietly become a dead-reckoning one.
-`scenarios.py` keeps the `FusionWeights::PoseCorrectionGain` default of `0.2` and
-treats the `0` as a debug value left in the sketch. `--no-localisation` is how
-you ask for dead reckoning on purpose. If the `0` is meant to stay, change
-`_wheel_imu_and_lidar_pose_fusion` to match.
+**Pose correction gain — a real mismatch, not a deliberate one.** `task42.h` and
+`task43.h` both build `SensorFusion sf(obs_v, obs_p, 0.1)`. `scenarios.py` passes
+no gain at all, so it takes the `FusionWeights::PoseCorrectionGain` default of
+`0.2`: a lidar fix is folded in twice as fast here as on the robot.
 
-**`task31`–`task34`.** The sketch is down to a single live `TASK 4.1 | 4.2`
-block; the commented-out 3.1–3.4 blocks these scenarios were written against
-have been deleted from it. They are kept as regression scenarios, because
-`DistancePlanner`, `HeadingPlanner`, `PosePlanner` and `PSPlanner` are all still
-in `planners.h` and this is the only thing that drives them end to end. A failure
-in one is a report about `planners.h`, not about the `.ino`.
+This used to be justified. The sketch passed `0`, which makes `fusePose` return
+dead reckoning unchanged, so mirroring it would have computed the lidar fix and
+multiplied it by zero — every localisation scenario here would quietly have
+become a dead-reckoning one, and `0` was read as a debug value left in the
+sketch. Now that the sketch passes a real `0.1`, that reasoning is spent and the
+`0.2` is simply stale. Pass `0.1` to the `SensorFusion` in
+`_wheel_imu_and_lidar_pose_fusion` to close it; expect localisation scenarios to
+converge more slowly when you do. `--no-localisation` remains how you ask for
+dead reckoning on purpose.
+
+**`task31`–`task34`.** The commented-out 3.1–3.4 blocks these scenarios were
+written against have been deleted from the sketch, which now picks between
+`task42.h` and `task43.h` with its `TASK` define. They are kept as regression
+scenarios, because `DistancePlanner`, `HeadingPlanner`, `PosePlanner` and
+`PSPlanner` are all still in `planners.h` and this is the only thing that drives
+them end to end. A failure in one is a report about `planners.h`, not about the
+`.ino`.
+
+Not a departure so much as a gap, and worth stating: **`task43.h` is not ported.**
+The sim has no `MazeMapper`, `MazeRunner` or `MazeWallMap`, so frontier
+exploration and localisation against discovered walls are exercised only on the
+robot. `planned` mirrors `task42.h`.
 
 ## Arguments
 
@@ -155,9 +168,14 @@ done
 about — the error a lidar fix has to find:
 
 ```
-python3 run.py --no-localisation --start-error 25,15,4   # 41 mm out, stays out
-python3 run.py                   --start-error 25,15,4   # 2.2 mm at the goal
+python3 run.py --no-localisation --start-error 25,15,4   # 39 mm out, stays out
+python3 run.py                   --start-error 25,15,4   # 11 mm at the goal
 ```
+
+Those two numbers are against whatever `maze_path.h` is installed, so they move
+whenever the route does — how much of a 29 mm start error the fix recovers
+depends on how much wall the route puts in front of the beams. Re-run them rather
+than trusting the figures here.
 
 ## Why `run.py` and not `python3 -m firmware-sim`
 

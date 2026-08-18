@@ -3,14 +3,15 @@
 Input photos. One overhead shot of the deck per file; everything else in
 `path-planning/` is derived from one of these.
 
-Tracked here: **`2.jpg`** and **`3.jpg`**. Note that several scripts default to
-photos that are *not* in the repo — `maze_demo.py` to `mazes/4.png`, and
-`export_map.py`, `bench.py` and `selftest.py --image` to `mazes/1.png`. Pass an
-image explicitly:
+**Nothing here is tracked.** `.gitignore` excludes `*.png` and `*.jpg`, so this
+directory arrives holding only this README, while several scripts default to a
+photo in it — `maze_demo.py` to `mazes/4.png`, and `export_map.py`, `bench.py`
+and `selftest.py --image` to `mazes/1.png`. Supply your own photo and pass it
+explicitly:
 
 ```sh
-./scripts/build_maze.sh 2.jpg --from 1,1 --to 5,3   # from the repo root
-uv run python maze_demo.py mazes/3.jpg              # from path-planning/
+./scripts/build_maze.sh 5.png --from 1,1 --to 3,3   # from the repo root
+uv run python maze_demo.py mazes/5.png             # from path-planning/
 ```
 
 `selftest.py --image` additionally sweeps *every* file in this directory for its
@@ -43,10 +44,12 @@ photographed properly.
 
 ## Naming
 
-`<n>.png` or `<n>.jpg`. `build_maze.sh` accepts any of `2`, `2.jpg` or
-`mazes/2.jpg`, and names its outputs after the stem (`map_2.h`, `path_2.h`,
-`map_2_overlay.png`), so keep stems distinct.
+`<n>.png` or `<n>.jpg`. `build_maze.sh` accepts any of `5`, `5.png` or
+`mazes/5.png`, and names its outputs after the stem (`map_5.h`, `path_5.h`,
+`map_5_overlay.png`), so keep stems distinct.
 
-Large images are fine to commit here; they are inputs, and a fit is only
-reproducible against the exact photo it was made from. The generated headers in
-`firmware/micromouse/` name their source photo in a header comment.
+A fit is only reproducible against the exact photo it was made from, and since
+none is tracked, that photo has to be kept somewhere outside git — the numbers in
+[`../README.md`](../README.md) do not reproduce without it. `maze_map.h` in
+`firmware/micromouse/` names the photo it was fitted from in its header comment,
+which is the only record in the repo of which one that was.

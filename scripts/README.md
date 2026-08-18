@@ -12,24 +12,27 @@ run from any directory and do not care about the caller's cwd.
 ```sh
 ./scripts/build.sh                    # micromouse, the default target, ~15s
 ./scripts/build.sh --flash            # ...and upload it, ~11s more
-./scripts/build.sh lidar              # the firmware-ds bring-up sketch
 ./scripts/build.sh --db               # compile_commands.json only, for clangd
-./scripts/build_maze.sh 4 --from 1,1 --to 7,7
+./scripts/build_maze.sh 5 --from 1,1 --to 3,3
 ```
 
-`./compile.sh` at the repo root is a two-line forwarder to `build.sh`, kept
-because that is the command in the READMEs and in `firmware/.clangd`'s own
-comment.
+`./compile.sh` at the repo root is a forwarder to `build.sh`, kept because that
+is the command in the READMEs and in `firmware/.clangd`'s own comment.
 
 ## build.sh
 
-Targets are `micromouse` (`firmware/micromouse`, the default) and `lidar`
-(`firmware-ds/lidar`); each builds into `build/` beside its sketch, which is
-where that tree's `.clangd` pins its compilation database. A target, if given,
-must be the **first** argument, so that a bare word appearing later is read as a
-passthrough flag's value rather than as a mistyped target — `--warnings all`
-works, and `./scripts/build.sh bogus` is an error rather than something
-`arduino-cli` gets to be confused by.
+`micromouse` (`firmware/micromouse`) is the default target and the only one that
+builds; it builds into `build/` beside the sketch, which is where that tree's
+`.clangd` pins its compilation database.
+
+> `--help` also lists a `lidar` target, pointing at `firmware-ds/lidar`. That
+> bring-up sketch has been deleted from the repo, so the target is dead and
+> `./scripts/build.sh lidar` fails on the missing directory.
+
+A target, if given, must be the **first** argument, so that a bare word appearing
+later is read as a passthrough flag's value rather than as a mistyped target —
+`--warnings all` works, and `./scripts/build.sh bogus` is an error rather than
+something `arduino-cli` gets to be confused by.
 
 Everything that is not one of the script's own options is passed straight
 through to `arduino-cli compile` — never to the upload step.
