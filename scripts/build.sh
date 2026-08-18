@@ -25,8 +25,14 @@ REPO_DIR=${0:A:h:h}
 # Build targets, as <name> -> <sketch directory relative to the repo root>.
 # Arduino requires a sketch's .ino to be named after its directory, so the
 # sketch file is always $SKETCH_DIR/${SKETCH_DIR:t}.ino, and the build dir is
-# always build/ beside the sketch — firmware/build and firmware-ds/build, which
-# is where firmware/.clangd and firmware-ds/.clangd each pin their database.
+# always build/ beside the sketch — firmware/build, which is where
+# firmware/.clangd pins its compilation database.
+#
+# NOTE: `lidar` is dead. firmware-ds/lidar was a bring-up sketch that printed
+# the three lidar ranges; it has been deleted from the repo, so this target
+# fails on the missing directory. Left here only so removing it is a deliberate
+# decision rather than a side effect of a docs pass — delete both entries when
+# you are sure nothing you have locally still wants it.
 typeset -A TARGETS=(
 	micromouse firmware/micromouse
 	lidar      firmware-ds/lidar
@@ -97,9 +103,12 @@ one of this script's own options is passed straight through to
 \`arduino-cli compile\`, so a bare word later on is a flag's value rather than a
 target:
   ./scripts/build.sh --warnings all      surface every compiler warning
-  ./scripts/build.sh lidar --verbose     show each compiler invocation
+  ./scripts/build.sh --verbose           show each compiler invocation
   ./scripts/build.sh --flash             build micromouse and upload it
-  ./scripts/build.sh lidar --flash       build the bring-up sketch and upload it
+  ./scripts/build.sh micromouse --db     name the target explicitly
+
+Only $DEFAULT_TARGET builds. The 'lidar' target listed above points at
+firmware-ds/lidar, which has been deleted from the repo, and fails.
 
 Passthrough reaches \`arduino-cli compile\` only, never the upload step.
 

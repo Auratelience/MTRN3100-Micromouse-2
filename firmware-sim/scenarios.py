@@ -1,17 +1,21 @@
-"""Scenario wiring, mirroring the TASK comment blocks in micromouse.ino.
+"""Scenario wiring, mirroring the task configurations in micromouse.ino.
 
-Each scenario reproduces one block's observer/fusion configuration, planner and
+Each scenario reproduces one configuration's observer/fusion wiring, planner and
 gains. Changing a task in the .ino should mean changing exactly one entry here.
 
-`planned` is the only one the sketch still carries: micromouse.ino is down to a
-single live TASK 4.1 | 4.2 block, and the commented-out 3.1-3.4 blocks these
-were written against have since been deleted from it. `task31`-`task34` are
-kept anyway, as regression scenarios. The planners they drive -- DistancePlanner,
-HeadingPlanner, PosePlanner, PSPlanner -- are all still in planners.h, and this
-is the only thing that exercises them end to end; dropping them would leave
-four ported classes with no coverage of the loop they run in. They no longer
-correspond to anything you can uncomment in the sketch, so treat a failure in
-one as a report about planners.h, not about the .ino.
+`planned` mirrors task42.h, and is the only scenario that corresponds to
+something the sketch still builds. micromouse.ino picks between task42.h and
+task43.h with its TASK define; task43.h is not ported here at all, because the
+sim has no MazeMapper or MazeRunner, so exploration is only exercised on the
+robot.
+
+`task31`-`task34` mirror the commented-out 3.1-3.4 blocks, which have since been
+deleted from the sketch. They are kept anyway, as regression scenarios: the
+planners they drive -- DistancePlanner, HeadingPlanner, PosePlanner, PSPlanner --
+are all still in planners.h, and this is the only thing that exercises them end
+to end; dropping them would leave four ported classes with no coverage of the
+loop they run in. They no longer correspond to anything in the sketch, so treat
+a failure in one as a report about planners.h, not about the .ino.
 """
 
 import math
@@ -107,23 +111,27 @@ def _wheel_imu_and_front_lidar_fusion(hw):
 
 
 def _wheel_imu_and_lidar_pose_fusion(hw):
-    """The TASK 4.1 | 4.2 configuration -- what the .ino runs today.
+    """The task42.h configuration -- micromouse.ino built with TASK 42.
 
     const std::array<VelocitySource, 2> obs_v = {
         {{&wheel_obsv, ObserverVTrust{1.0f, 0.2f}},
          {&imu_obsv, FusionWeights::OmegaVTrust}}};
     LidarObserver lidar_obsv(lidar, MAZE_MAP);
     const std::array<PoseSource, 1> obs_p = {{{&lidar_obsv, FusionWeights::XYPTrust}}};
-    SensorFusion sf(obs_v, obs_p, 0);
+    SensorFusion sf(obs_v, obs_p, 0.1);
 
-    One deliberate departure from the sketch: the gain stays at the
-    FusionWeights::PoseCorrectionGain default of 0.2, where the .ino currently
-    passes 0. A gain of 0 makes fusePose() return dead reckoning unchanged, so
-    mirroring it would compute the lidar fix and then multiply it by zero --
-    every localisation scenario here would silently become a dead-reckoning
-    one. Treated as a debug value left in the sketch rather than as the
-    intended configuration; `--no-localisation` is how you ask for dead
-    reckoning on purpose.
+    One departure from the sketch, and it is stale rather than deliberate: no
+    gain is passed below, so this takes the FusionWeights::PoseCorrectionGain
+    default of 0.2 where task42.h passes 0.1. A lidar fix is therefore folded in
+    twice as fast here as on the robot.
+
+    It used to be justified -- the sketch passed 0, which makes fusePose()
+    return dead reckoning unchanged, so mirroring it would have computed the
+    lidar fix and then multiplied it by zero, silently turning every
+    localisation scenario into a dead-reckoning one. Now that the sketch passes
+    a real 0.1, that reasoning is spent. Pass 0.1 as the third argument to close
+    it; expect slower convergence when you do. `--no-localisation` remains how
+    you ask for dead reckoning on purpose.
     """
     return SensorFusion(
         [
@@ -244,9 +252,9 @@ def task32_bench():
 
 # --- PLANNED PATH / LIDAR LOCALISATION ---------------------------------
 #
-# The block micromouse.ino actually has uncommented today:
+# task42.h -- micromouse.ino built with TASK 42:
 #
-#     SensorFusion sf(obs_v, obs_p);          // wheels + IMU + lidar pose
+#     SensorFusion sf(obs_v, obs_p, 0.1);     // wheels + IMU + lidar pose
 #     MotionPlanner planner(10, 0.06f, 200.0f);
 #     ...
 #     lidar_obsv.setPrior(...);

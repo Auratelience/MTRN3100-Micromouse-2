@@ -129,12 +129,11 @@ class OLEDMap {
                 if (mapper.visited(c)) {
                     g.drawPixel(left + PITCH / 2, top + PITCH / 2, SSD1306_WHITE);
                 } else if (mapper.sealedCell(c)) {
-                    // Crossed out: a cell the search can never enter. Before
-                    // the run that is the chamfered corners, which the sketch
-                    // seals as priors; during it, anywhere the discovered
-                    // walls have closed off. Four wall lines alone already
-                    // draw a box, but a box is what an ordinary cell in a
-                    // tight corridor looks like too.
+                    // Crossed out: a cell the search can never enter, because
+                    // the discovered walls have closed it off -- a chamfered
+                    // corner, or anywhere else walled in on all four sides.
+                    // Four wall lines alone already draw a box, but a box is
+                    // what an ordinary cell in a tight corridor looks like too.
                     g.drawLine(left + 1, top + 1, right - 1, bottom - 1, SSD1306_WHITE);
                     g.drawLine(left + 1, bottom - 1, right - 1, top + 1, SSD1306_WHITE);
                 }

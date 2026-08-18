@@ -6,7 +6,7 @@
 // 85 panels, 52 posts (2 with no adjoining panel), 5 cylinders
 // 
 // Robot frame: x forward, y left, mm. The origin is the start pose
-// [270.0, 270.0] mm heading 90 deg in map coordinates (auto), which is where a
+// [270.0, 270.0] mm heading 90 deg in map coordinates, which is where a
 // freshly reset odometry frame reads (0, 0, 0). Export the path with the
 // same --from/--theta0 or the two will not share a frame.
 // 

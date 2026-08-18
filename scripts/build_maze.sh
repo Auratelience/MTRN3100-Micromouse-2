@@ -4,8 +4,11 @@
 # map header installed.
 #
 #     ./scripts/build_maze.sh 4                  # mazes/4.png, cell 1,1 -> 7,7
-#     ./scripts/build_maze.sh 2.jpg --from 1,1 --to 5,3
+#     ./scripts/build_maze.sh 5.png --from 1,1 --to 3,3
 #     ./scripts/build_maze.sh 1 --no-install     # overlay and headers there, firmware untouched
+#
+# No maze photo is tracked (.gitignore excludes *.png and *.jpg), so supply
+# your own in path-planning/mazes/ before any of the above will run.
 #
 # Runs maze_demo.py for the plan and the overlay, then export_map.py for
 # maze_map.h.  Both get the *same* --from/--theta0/--r, because the exported
@@ -43,7 +46,7 @@ TO=7,7
 THETA0=auto
 RADIUS=40
 TURN=25
-ITERS=4000
+ITERS=8000
 SEED=1
 MODE=dubins
 OUT=

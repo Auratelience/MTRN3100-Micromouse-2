@@ -45,36 +45,14 @@ constexpr float STD_DIST_TOL                 = 2.0f;
 // Position error at which PSPlanner stops translating and starts aligning
 // with the target heading.  The larger deadband prevents lidar/odometry
 // noise near a cell centre from delaying the turn handoff.
-constexpr float PS_POSITION_TOL              = 5.0f;
+constexpr float PS_POSITION_TOL              = 10.0f;
 constexpr float STD_ANG_TOL                  = 0.05f;
 constexpr float SEGMENT_ADVANCE_THRESHOLD    = 0.995f;
 
 // MAZE
-// Cells per side, and so the size the mazeMapper<> alias instantiates
-// MazeMapper<> at, the same way TRIG_LUT_SIZE sizes trig. The class is
-// templated on it, so a test or a second instance can pick another size
-// without touching the header.
+// Cells per side lives in task43.h, next to the MazeRunner/MazeWallMap/OLEDMap
+// instances it sizes: 4.3 is the only task that builds a MazeMapper.
 //
-// Cost grows as N^2: at 9 the mapper holds ~580 bytes and its shortest-path
-// search borrows ~250 bytes of stack, at 16 that is ~1.8 kB and ~770 bytes.
-//
-// Nine, not ten, because maze_map.h describes a 10x10 post lattice, and ten
-// post lines bound nine cells. Cell centres in it run -180 mm to 1260 mm on
-// both axes.
-constexpr uint8_t MAZE_SIZE = 2;
-
-// The maze is not a full rectangle: every corner is chamfered, so the corner
-// cell and its two orthogonal neighbours are not there. This is the Manhattan
-// radius of that cut measured from the corner cell, so 0 would remove the
-// corner alone and 1 removes the three cells the physical maze is missing --
-// twelve in all.
-//
-// The sketch seals each cropped cell on all four sides as a prior before
-// exploration starts. MazeMapper has no concept of a cell that does not
-// exist, and does not need one: a cell walled on every side is one its search
-// can neither enter nor plan through.
-constexpr int8_t MAZE_CORNER_CROP = -1;
-
 // Physical size of one grid cell, mm. Full-size Micromouse uses 180mm,
 // half-size 168mm. Shared by the path factory and the instruction runner.
 constexpr float MAZE_CELL_SIZE = 180.0f;
