@@ -88,9 +88,31 @@ class MotionPlanner {
         }
 
         const Segment& s = path[pathIdx];
-        float v          = cruiseVelocity;
+        float v          = curvatureLimitedVelocity(s.curvature);
         float o          = omega(s, pose, v);
         return {v, o};
+    }
+
+    // Cruise, or as much of it as the arc's own feedforward leaves room for.
+    //
+    // omega() asks for curvature * v to hold an arc, so the outer wheel turns at
+    // v (1 + curvature * AXLE_LEN / 2) / WHEEL_RADIUS. Requiring that to be at
+    // most TURN_ENVELOPE_MARGIN of the wheel limit rearranges to the bound
+    // below, and what it buys is authority rather than speed: unbounded, the
+    // feedforward alone is several times the limit, Kinematics::IK scales every
+    // wheel by one factor to fit, and the heading and lateral terms come out
+    // scaled by that same factor -- the robot holds the arc's radius and
+    // corrects almost nothing. Capped, the feedforward fits and the rest of the
+    // envelope is the correction's to spend.
+    //
+    // Straights are untouched: their omega is feedback only, so there is no
+    // feedforward to make room for.
+    float curvatureLimitedVelocity(float curvature) const {
+        if (curvature <= STRAIGHT_TOLERANCE) return cruiseVelocity;
+
+        const float limit = TURN_ENVELOPE_MARGIN * MAXIMUM_FORWARD_VELOCITY /
+                            (1.0f + curvature * AXLE_LEN * 0.5f);
+        return limit < cruiseVelocity ? limit : cruiseVelocity;
     }
 
     float KPHeading;

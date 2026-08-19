@@ -5,6 +5,8 @@
 #pragma once
 #include <Arduino.h>
 
+constexpr uint8_t MAZE_CORNER_CROP = 1;
+
 // MATH
 constexpr float PI_TWO  = PI / 2.0f;
 constexpr float PI_FOUR = PI / 4.0f;
@@ -58,8 +60,36 @@ constexpr float STD_DIST_TOL                 = 2.0f;
 // with the target heading.  The larger deadband prevents lidar/odometry
 // noise near a cell centre from delaying the turn handoff.
 constexpr float PS_POSITION_TOL              = 8.0f;
-constexpr float STD_ANG_TOL                  = 0.02f;
+// constexpr float STD_ANG_TOL                  = 0.02f;
+constexpr float STD_ANG_TOL                  = 0.05f;
+
 constexpr float SEGMENT_ADVANCE_THRESHOLD    = 0.995f;
+
+// Fraction of the wheel speed limit an arc's feedforward is allowed to spend,
+// leaving the rest for MotionPlanner's heading and lateral terms.
+//
+// On an arc the planner asks for omega = curvature * v, so the outer wheel runs
+// at v (1 + curvature * AXLE_LEN / 2) / WHEEL_RADIUS. Left at cruise that is
+// four or five times the wheel limit on a tight arc, and Kinematics::IK scales
+// both wheels by one factor to fit -- which preserves the v : omega ratio, so
+// the turn is still driven at its own radius, but the feedback terms are scaled
+// down by the same factor and arrive with almost no authority. Capping v so the
+// feedforward alone fits inside this fraction is what gives them room: the
+// remaining 1 - margin is theirs, about 1.7 rad/s of correction on a 10 mm arc.
+constexpr float TURN_ENVELOPE_MARGIN         = 0.8f;
+
+// How far behind an arc's start a position still reads as "not started"
+// (Segment::arcProgress), rather than as having come round past the end.
+//
+// A handover is a distance, not an angle: the straight feeding an arc lets go
+// within a few mm of its start, and that slop subtends more angle the tighter
+// the arc, so this is carried in mm and converted with the curvature. Kept
+// small deliberately -- too large and a robot that has come round the back of
+// the circle reads as "not started" and can never satisfy
+// SEGMENT_ADVANCE_THRESHOLD, which strands it on that segment; too small and a
+// slightly early handover reads as past the end and the arc is skipped. A cut
+// corner and a robot that never leaves the corner are not equal costs.
+constexpr float ARC_BEHIND_START_TOL_MM      = 5.0f;
 
 // MAZE
 // Cells per side lives in task43.h, next to the MazeRunner and MazeWallMap
@@ -237,7 +267,7 @@ constexpr float LIDAR_OBSERVER_PRIOR_SIGMA_RAD = 0.05f;
 // Beam rejection. A residual larger than this is a beam looking at something
 // the map does not contain (a hand, a chair leg, the robot's own start box) or
 // at the wrong surface entirely, and folding it in would drag the pose off.
-constexpr float LIDAR_OBSERVER_MAX_RESIDUAL_MM = 40.0f;
+constexpr float LIDAR_OBSERVER_MAX_RESIDUAL_MM = 10.0f;
 
 // cos of the incidence angle below which a range is discarded. At 0.34 (~70
 // degrees off square) a 1 mm quantisation step already moves the implied

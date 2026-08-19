@@ -44,26 +44,32 @@
 //     mapper.begin();
 //     mapper.markWall(Cell{4, 4}, North);                  // priors, if any
 //     while (!mapper.doneExploring()) {
-//         mapper.observe(frontWall, leftWall, rightWall);  // at the current cell
-//         Direction move;
-//         if (!mapper.planMove(move)) break;
-//         if (!driveOneCell(move)) break;                  // caller's problem
-//         mapper.commitMove(move);                         // only once it arrived
+//         mapper.observe(frontWall, leftWall, rightWall);  // at the current
+//         cell Direction move; if (!mapper.planMove(move)) break; if
+//         (!driveOneCell(move)) break;                  // caller's problem
+//         mapper.commitMove(move);                         // only once it
+//         arrived
 //     }
 //     if (mapper.faulted()) { /* map is suspect, do not race on it */ }
 //     mapper.buildShortestPathToGoal();
 //
 // observe() only ever sees the three sides the sensors face, so the side the
 // robot came in through is never sensed. That is fine everywhere except the
-// start cell, which was never entered: nobody has looked at its fourth side, and
-// a cleared wall bit reads as open, so planMove would drive backwards through it
-// on the first move.
+// start cell, which was never entered: nobody has looked at its fourth side,
+// and a cleared wall bit reads as open, so planMove would drive backwards
+// through it on the first move.
 //
 // The caller settles that by looking rather than by assuming. Turn ninety
-// degrees before the first planMove -- commitTurn to keep the map's heading with
-// the robot's -- and the next observe() reads the side that was behind on the
-// sensor that is now pointing at it. Unnecessary if the perimeter already
+// degrees before the first planMove -- commitTurn to keep the map's heading
+// with the robot's -- and the next observe() reads the side that was behind on
+// the sensor that is now pointing at it. Unnecessary if the perimeter already
 // settled it, which it has whenever the run starts against the maze edge.
+
+struct Cell {
+    int8_t x;
+    int8_t y;
+};
+
 template <size_t N>
 class MazeMapper {
     static_assert(N >= 2, "N >= 2 required.");
@@ -76,11 +82,6 @@ class MazeMapper {
     // Which side of a cell carries a wall. Values line up with
     // directionIndex(), so wallMask() is a shift rather than another switch.
     enum WallBit : uint8_t { WallNorth = 1, WallWest = 2, WallSouth = 4, WallEast = 8 };
-
-    struct Cell {
-        int8_t x;
-        int8_t y;
-    };
 
     MazeMapper(Cell startCell, Direction startHeading, Cell goalCell) :
         start(startCell), goal(goalCell), current(startCell),
@@ -198,6 +199,24 @@ class MazeMapper {
         if (isOpen(c, d)) return false;
         addWall(c, d);
         return true;
+    }
+
+    // Walls a cell in on all four sides: the way to say "this cell is not
+    // there". A maze whose corners are chamfered, or whose outline is not a
+    // rectangle, is seeded with these before the first observe().
+    //
+    // There is no separate notion of a nonexistent cell, and none is needed.
+    // planMove skips a neighbour behind a wall and buildShortestPath will not
+    // expand through one, so a cell walled on every side can be neither
+    // entered nor planned through. False if any side was refused -- a boundary the robot
+    // has already driven through outranks a prior, and a cell that is only
+    // partly sealed is one the search can still walk into.
+    bool sealCell(const Cell& c) {
+        bool ok = markWall(c, North);
+        ok      = markWall(c, South) && ok;
+        ok      = markWall(c, West) && ok;
+        ok      = markWall(c, East) && ok;
+        return ok;
     }
 
     // Walled on every side and never entered, so unreachable: a cell the

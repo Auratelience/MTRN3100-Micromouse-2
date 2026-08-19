@@ -26,6 +26,7 @@
 
 #include <Embedded_Template_Library.h>
 #include <etl/delegate.h>
+#include <sys/wait.h>
 
 #include "constants.h"
 #include "mazeMapper.h"
@@ -52,10 +53,9 @@
 // maze_map.h describes its 10x10 post lattice, and ten post lines bound nine
 // cells, with cell centres from -180 mm to 1260 mm on both axes. Set this to 9
 // to explore the full deck; nothing else has to change.
-constexpr uint8_t MAZE_SIZE = 6;
+constexpr uint8_t MAZE_SIZE = 9;
 
 using mazeMapper = MazeMapper<MAZE_SIZE>;
-
 // The complete maze configuration: the runner is handed it at construction and
 // taskBegin() only has to start it.
 //
@@ -63,19 +63,22 @@ using mazeMapper = MazeMapper<MAZE_SIZE>;
 // left, so North steps +x and West steps +y. Start in a corner facing North,
 // goal at (2, 4).
 PSPlanner psp(8.0f, 10.0f);
-mazeMapper::Cell startCell = {0, 0};
-Direction startHeading     = North;
-mazeMapper::Cell goalCell  = {0, 4};
+Cell startCell = {1, 1};
+Direction startHeading = North;
+Cell goalCell  = {5, 5};
 
-MazeRunner<MAZE_SIZE> runner(
-    lidar,
-    psp,
-    startCell,
-    startHeading,
-    goalCell
-);
+MazeRunner<MAZE_SIZE> runner(lidar, psp, startCell, startHeading, goalCell);
 
-MazeWallMap<MAZE_SIZE> wallMap(runner.map());
+// bool lambda = []() {
+//     runner.mapper.hasWall(Cell{7, 8}, South);
+//     runner.mapper.hasWall(Cell{8, 1}, South);
+//     runner.mapper.hasWall(Cell{7, 0}, South);
+//     runner.mapper.hasWall(Cell{0, 1}, South);
+//     return true;
+// }();
+
+MazeWallMap<MAZE_SIZE> wallMap(runner.mapper);
+
 LidarObserver<MazeWallMap<MAZE_SIZE>> lidar_obsv(lidar, wallMap);
 
 // The lidar for position, the gyro for heading, and neither for the other.
@@ -114,10 +117,10 @@ using runnerState = MazeRunner<MAZE_SIZE>::State;
 const char* screenMode() {
     switch (runner.state()) {
         case runnerState::Init:    return "INIT";
-        case runnerState::Explore: return runner.map().homing() ? "HOME" : "EXPL";
+        case runnerState::Explore: return runner.mapper.homing() ? "HOME" : "EXPL";
         case runnerState::Plan:    return "PLAN";
         case runnerState::Race:    return "EXEC";
-        default:                   return runner.map().faulted() ? "FAULT" : "DONE";
+        default:                   return runner.mapper.faulted() ? "FAULT" : "DONE";
     }
 }
 
@@ -132,7 +135,7 @@ const char* screenMode() {
 //   else  poses driven of the poses in the route, one notch per instruction.
 OLEDMetric screenMetric() {
     if (runner.state() == runnerState::Explore) {
-        if (runner.map().homing()) return OLEDMetric{'P', runner.map().homeProgress()};
+        if (runner.mapper.homing()) return OLEDMetric{'P', runner.mapper.homeProgress()};
         return OLEDMetric{'E', runner.exploreProgress()};
     }
     return OLEDMetric{'P', runner.raceProgress()};

@@ -42,8 +42,6 @@ template <size_t N>
 class MazeRunner {
     public:
 
-    using Cell = typename MazeMapper<N>::Cell;
-
     enum class State : uint8_t { Init, Explore, Plan, Race, Done };
 
     MazeRunner(
@@ -67,6 +65,10 @@ class MazeRunner {
 
         const Cell start = mapper.startPosition();
 
+        croppedCells = sealCroppedCells();
+        reachableCells = static_cast<uint16_t>(MazeMapper<N>::MAX_CELLS - croppedCells);
+
+
         // The start cell's fourth side is the one thing the sensors cannot
         // settle from where they sit: observe() reads front, left and right, and
         // the robot never drove in through the back. So look at it -- see
@@ -86,6 +88,27 @@ class MazeRunner {
         return true;
     }
 
+    uint16_t croppedCells   = 0;
+    uint16_t reachableCells = MazeMapper<N>::MAX_CELLS;
+
+    static bool croppedCell(int x, int y) {
+        const int dx = etl::min<int>(x, static_cast<int>(N) - 1 - x);
+        const int dy = etl::min<int>(y, static_cast<int>(N) - 1 - y);
+        return (dx + dy) <= static_cast<int>(MAZE_CORNER_CROP);
+    }
+
+    uint16_t sealCroppedCells() {
+        uint16_t n = 0;
+        for (int8_t x = 0; x < static_cast<int8_t>(N); ++x) {
+            for (int8_t y = 0; y < static_cast<int8_t>(N); ++y) {
+                if (!croppedCell(x, y)) continue;
+                mapper.sealCell(Cell{x, y});
+                ++n;
+            }
+        }
+        return n;
+    }
+
     Velocity update(const Pose& pose, float dt) {
         switch (runState) {
             case State::Explore: return explore(pose, dt);
@@ -97,7 +120,7 @@ class MazeRunner {
 
     State state() const { return runState; }
 
-    const MazeMapper<N>& map() const { return mapper; }
+    MazeMapper<N> mapper;
 
     // The discovered route in millimetres, one point per cell, empty until
     // Plan has run.
@@ -128,7 +151,6 @@ class MazeRunner {
 
     LIDAR& lidar;
     PSPlanner& planner;
-    MazeMapper<N> mapper;
 
     State runState        = State::Init;
     bool moveInFlight     = false;

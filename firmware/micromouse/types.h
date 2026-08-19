@@ -612,14 +612,30 @@ class Segment {
     // mm early) then read as ">1" ("past the end"), so the planner's advance
     // loop skipped the whole arc. Here a behind-start point reads slightly
     // negative instead, and sweeps up to a full turn are handled correctly.
+    //
+    // How much of the circle is given to "behind the start" is the whole
+    // question, because everything else on it reads as past the end and so
+    // finishes the segment. Splitting the unused part in half -- the obvious
+    // reading of "which end is it nearer" -- is what stranded the robot on the
+    // r = 10 mm arcs of a CV-fitted route: those are driven as near-pivots, the
+    // arc centre sits 10 mm away, and a robot that has rotated round the back of
+    // that circle without translating lands in the half that reads negative. It
+    // then cannot satisfy SEGMENT_ADVANCE_THRESHOLD from any position it can
+    // still reach, and spins there for good. Reserving only the handover slop
+    // lets it finish on overshoot instead.
     inline float arcProgress(const Vec2D& pos) const {
         float startAngle = arg(start - c);
         float sweep      = arcTravel(startAngle, arg(end - c));
         if (sweep <= 0.0f) return 1.0f;
         float travelled = arcTravel(startAngle, arg(pos - c));
-        // Points on the unused side of the circle wrap toward TWO_PI; treat
-        // those as "not started" (negative) rather than "past the end".
-        if (travelled > 0.5f * (sweep + TWO_PI)) travelled -= TWO_PI;
+
+        // Slop as an angle, and never more than half the unused circle -- that
+        // bound is the old rule exactly, so this can only ever be tighter.
+        float band = curvature * ARC_BEHIND_START_TOL_MM;
+        float half = 0.5f * (TWO_PI - sweep);
+        if (band > half) band = half;
+
+        if (travelled > TWO_PI - band) travelled -= TWO_PI;
         return travelled / sweep;
     }
 

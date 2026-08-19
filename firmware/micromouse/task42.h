@@ -56,7 +56,7 @@ SensorFusion sf(obs_v, obs_p, 0.1f, FusionWeights::ThetaCorrectionGain);
 
 Pose fusedPose() { return sf.estimate.pose(); }
 
-MotionPlanner planner(10, 0.06f);
+MotionPlanner planner(8, 0.06f);
 
 // Delegate, so the display does not depend on the planner's type. The
 // equivalent of MazeRunner::raceProgress() on this side.

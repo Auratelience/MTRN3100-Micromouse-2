@@ -6,6 +6,10 @@
 --from / --to take cell indices and use the cell centre, (180i+90, 180j+90).
 --from-mm / --to-mm take world millimetres directly.
 
+``--scale k`` resizes the emitted path by k on the way out.  Only the path:
+the map, the clearance check and the overlay stay life size, so a scaled path
+is one nothing has checked for collisions.
+
 The default planner is Dubins RRT*, whose output is a list of straights and
 arcs -- the firmware's Segment alphabet -- printed at the end as
 appendSegment() calls ready to paste into the sketch.  ``--mode polyline`` runs
@@ -202,12 +206,20 @@ def main():
     ap.add_argument(
         "--turn-radius", type=float, default=30.0, help="arc radius the path uses, mm"
     )
+    ap.add_argument(
+        "--scale",
+        type=float,
+        default=1.0,
+        help="resize the emitted path by this factor (default 1, unscaled)",
+    )
     ap.add_argument("--iters", type=int, default=4000)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", default="map_overlay.png")
     ap.add_argument("--emit", default=None, help="write the appendSegment() block here")
     ap.add_argument("--json", dest="js", default=None, help="write segments as JSON")
     a = ap.parse_args()
+    if a.scale <= 0.0:
+        ap.error(f"--scale must be positive, got {a.scale}")
 
     img = cv2.imread(a.image)
     assert img is not None, a.image
@@ -334,7 +346,37 @@ def main():
                 print("  PROBLEM  " + p)
 
         fw, _ = sg.to_firmware(segs, (start[0], start[1], theta0), local=True)
-        block = sg.to_cpp(fw, note=f"{a.src} -> {a.dst}, r={a.turn_radius:.0f} mm")
+        note = f"{a.src} -> {a.dst}, r={a.turn_radius:.0f} mm"
+        rho = out["rho"]
+        if a.scale != 1.0:
+            # after to_firmware, so what gets resized is what gets emitted and
+            # nothing the planner reasoned about
+            fw = sg.scale(fw, a.scale)
+            rho *= a.scale
+            # the effective radius, not the planner's: this comment is the
+            # only record the installed header keeps of how it was built
+            note += f", scaled x{a.scale:g} to r={rho:.0f} mm"
+            print()
+            print(
+                f"scale      x{a.scale:g} -- emitted path is {sg.length(fw):.0f} mm "
+                f"at r={rho:.0f} mm; hold cruiseVelocity <= "
+                f"{rs.speed_limit_mm_s(rho):.0f} mm/s"
+            )
+            print(
+                "           the map, the clearance above and the overlay are "
+                "life size, so nothing has checked this path for collisions"
+            )
+            # the arcs have to be re-checked, not just re-measured: scaling up
+            # walks a radius toward the tolerance past which the firmware reads
+            # an arc as a straight and drives its chord
+            scaled = sg.check(fw)
+            if not scaled:
+                print("           still firmware-representable at this scale")
+            else:
+                print(f"           {len(scaled)} problem(s) after scaling:")
+                for p in scaled[:8]:
+                    print("  PROBLEM  " + p)
+        block = sg.to_cpp(fw, note=note)
         print()
         print(block)
         if a.emit:
@@ -346,7 +388,7 @@ def main():
                 json.dump(
                     dict(
                         frame="robot: x forward, y left, mm; start pose (0,0,0)",
-                        turn_radius_mm=out["rho"],
+                        turn_radius_mm=rho,
                         segments=sg.to_dicts(fw),
                     ),
                     fh,

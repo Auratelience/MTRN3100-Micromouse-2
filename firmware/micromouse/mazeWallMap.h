@@ -153,8 +153,6 @@ class MazeWallMap {
 
     const MazeMapper<N>& mapper;
 
-    using Cell = typename MazeMapper<N>::Cell;
-
     static Cell cell(int x, int y) {
         return Cell{static_cast<int8_t>(x), static_cast<int8_t>(y)};
     }

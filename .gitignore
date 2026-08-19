@@ -16,3 +16,5 @@ path-planning/uv.lock
 **/*.bak
 *.stl
 !hardware/Splashscreen.png
+**/maze_map.h
+**/maze_path.h
