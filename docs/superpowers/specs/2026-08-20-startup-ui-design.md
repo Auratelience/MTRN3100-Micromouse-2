@@ -153,9 +153,10 @@ The motors are never driven during the wizard, so the wheels turn freely.
 | 2 | Start cell `X:_ Y:_` | left wheel = x, right wheel = y |
 | 3 | Start heading `N / E / S / W` | right wheel |
 | 4 | Goal cell `X:_ Y:_` | left wheel = x, right wheel = y |
-| 5 | 5 s countdown | right lidar skips, left lidar returns to 4 |
+| 5 | 5 s countdown | none by default — see Countdown inputs |
 
-Text only, drawn through `display.gfx()`. No `OLEDScreen` involvement.
+Text drawn through `display.gfx()`, plus the chrome layer below. No
+`OLEDScreen` involvement.
 
 ### Encoder dials
 
@@ -211,6 +212,22 @@ constexpr uint8_t  UI_BUTTON_DEBOUNCE_SAMPLES = 3;
 This behaves identically in a corridor and on open floor, which is the property
 a fixed threshold cannot have.
 
+**Baseline drift compensation.** A fixed baseline breaks the moment the robot is
+moved during the wizard, which is exactly what happens when it is placed into
+the maze: open bench to a corridor is a ~150 mm drop, six times
+`PRESS_DELTA`, so placement reads as a press. The baseline therefore adapts —
+any reading that sits more than `PRESS_DELTA` from the baseline for longer than
+
+```cpp
+constexpr uint16_t UI_BUTTON_BASELINE_ADOPT_MS = 1200;
+```
+
+without having been consumed as a press is adopted as the new baseline. A hand
+tap is short and fires; a wall that appears and stays is absorbed and does not.
+
+This is the standard drift-compensated threshold detector, and it is what makes
+the buttons survive the robot being picked up mid-wizard.
+
 ### Validation
 
 Dials clamp to `[0, n-1]`, so an out-of-range cell is unreachable by
@@ -219,8 +236,81 @@ the panel.
 
 ### Back behaviour
 
-Screen 1 is the first step; back is a no-op there. Back on the countdown
-returns to screen 4.
+Screen 1 is the first step; back is a no-op there.
+
+### Countdown inputs
+
+Both countdown inputs are compile-time constants, **both defaulting off**:
+
+```cpp
+constexpr bool UI_COUNTDOWN_SKIP_ENABLED = false;  // right lidar ends the wait
+constexpr bool UI_COUNTDOWN_BACK_ENABLED = false;  // left lidar returns to 4
+```
+
+The countdown is the one screen during which the robot is being handled, so
+both sensors are unreliable there in a way drift compensation reduces but does
+not eliminate — a decisive placement into a corridor can still land inside the
+adopt window. Losing the countdown to a phantom skip is a nuisance; losing it
+to a phantom back drops the operator into goal selection with their hands full,
+which is worse.
+
+With both off the countdown draws no button chrome at all, which is
+self-documenting: nothing is live, place the robot freely.
+
+### Input affordances (chrome)
+
+Every wizard screen draws a chrome layer showing which inputs are live, so the
+panel always answers "what can I do here?" without the operator remembering the
+sequence.
+
+**Lidar buttons.** A filled semicircle on the corresponding edge, vertically
+centred. `fillCircle(0, 32, 6)` and `fillCircle(127, 32, 6)` — the centre sits
+on the edge pixel, so GFX clips exactly half and the result is a semicircle
+bulging inward, at no cost over a normal circle. Drawn only when that button is
+live on the current screen.
+
+On a consumed press the semicircle inverts for
+
+```cpp
+constexpr uint16_t UI_BLINK_MS = 200;   // ~2 frames at OLED_REFRESH_MS
+```
+
+**Wheel dials.** A `drawCircle` of radius 7 in each bottom corner, at (8, 55)
+and (119, 55), with a single spoke from centre to rim. The spoke angle is
+`TWO_PI * count / ENC_CPR` off the **raw** signed encoder count, not the
+detented value — so it tracks the physical wheel 1:1 and moves smoothly rather
+than stepping, which is what makes it read as live. Drawn only when that wheel
+is bound on the current screen.
+
+The wizard redraws through `display.due()` at `OLED_REFRESH_MS`, so 10 fps. A
+hand-spin fast enough to alias the spoke is far faster than anyone reads a menu
+at; this is an affordance, not an instrument.
+
+**Per-screen map**
+
+| Screen | left button | right button | left dial | right dial |
+|--------|-------------|--------------|-----------|------------|
+| 1 size | — | yes | — | yes |
+| 2 start cell | yes | yes | yes | yes |
+| 3 heading | yes | yes | — | yes |
+| 4 goal cell | yes | yes | yes | yes |
+| 5 countdown | per constant | per constant | — | — |
+
+Screen 1 draws no left button because back is a no-op there — the chrome and the
+behaviour agree, which is the whole point of drawing it.
+
+**Layout budget.** Chrome occupies x < 8, x > 119 and y > 46, leaving a content
+region of 18 characters by 5 lines at `OLED_CHAR_WIDTH` / `OLED_TEXT_HEIGHT`.
+Ample for every screen above.
+
+**Interface.** One stateless drawing function; the wizard owns all the state:
+
+```cpp
+struct UIChrome { bool leftButton, rightButton, leftDial, rightDial; };
+
+void drawChrome(OLEDDisplay&, const UIChrome&, long leftCount, long rightCount,
+                bool leftBlink, bool rightBlink);
+```
 
 ## 4. Bring-up order
 
@@ -345,7 +435,12 @@ Verification is therefore:
 3. bench: each wizard screen, both dial directions, both lidar buttons, the
    armed-on-release behaviour with a hand held in front at boot, and the
    goal == start refusal
-4. a full run on the deck at n = 9, and one small run at n = 5, confirming the
+4. chrome: the per-screen map above renders as specified, the spokes track the
+   wheels, and a press blinks its semicircle
+5. drift compensation: run the wizard on the bench, then place the robot into a
+   corridor mid-wizard and confirm neither button fires once the adopt window
+   has passed
+6. a full run on the deck at n = 9, and one small run at n = 5, confirming the
    panel fits the selected maze and `exploreProgress` reaches 100%
 
 ## 9. Documentation
