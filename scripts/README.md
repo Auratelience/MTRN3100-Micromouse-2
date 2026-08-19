@@ -1,19 +1,22 @@
 # scripts
 
-Every shell entry point in the repo. Both scripts are zsh, both take `--help`,
-and both derive their paths from the repo root — `${0:A:h:h}` — so they can be
-run from any directory and do not care about the caller's cwd.
+Every entry point in the repo. All three take `--help` and all three derive
+their paths from the repo root, so they can be run from any directory and do not
+care about the caller's cwd. The two `.sh` are zsh; `export_splash.py` is a
+`uv run --script` file that carries its own dependency block.
 
 | script | what it does |
 | --- | --- |
 | `build.sh` | compiles an Arduino sketch into `build/` beside it |
 | `build_maze.sh` | maze photo in, overlay on screen and `maze_map.h`/`maze_path.h` installed into the firmware |
+| `export_splash.py` | splash art in, `splash_screen.h` installed into the firmware |
 
 ```sh
 ./scripts/build.sh                    # micromouse, the default target, ~15s
 ./scripts/build.sh --flash            # ...and upload it, ~11s more
 ./scripts/build.sh --db               # compile_commands.json only, for clangd
 ./scripts/build_maze.sh 5 --from 1,1 --to 3,3
+./scripts/export_splash.py            # re-export the OLED splash bitmap
 ```
 
 `./compile.sh` at the repo root is a forwarder to `build.sh`, kept because that
@@ -46,11 +49,18 @@ matches are both errors that name what was seen, because silently picking one of
 two boards is how you flash the wrong device. `--port /dev/cu.usbmodemXXXX`
 skips detection entirely.
 
-Two ordering choices worth knowing: the port is resolved *before* the build, so
-an unplugged board costs a second rather than a full compile, and `--db --flash`
-is rejected up front, since `--db` skips code generation and leaves no binary to
-upload. Detection is the only thing in this script that needs `python3`, and it
-runs only on the `--flash` path.
+`--flash` also re-runs [`export_splash.py`](#export_splashpy) before the
+compile, so the logo the board boots with is always the current art. A plain
+build skips it and compiles the committed header as it stands, which keeps the
+fast inner loop free of `uv`.
+
+Three ordering choices worth knowing: the port is resolved *before* the build, so
+an unplugged board costs a second rather than a full compile; the splash is
+re-exported after that check but before the compile, so a missing board still
+fails first and the regenerated header is the one that gets built; and
+`--db --flash` is rejected up front, since `--db` skips code generation and
+leaves no binary to upload. Detection is the only thing in this script that
+needs `python3`, and it runs only on the `--flash` path.
 
 The Nano R4 uploads over DFU, so the port re-enumerates during the flash; that
 is normal and `arduino-cli` reports the new port when it finishes.
@@ -74,3 +84,22 @@ and the per-run `map_<stem>.h`/`path_<stem>.h`/overlay it leaves behind. That is
 deliberate — `.gitignore` covers those outputs as `path-planning/*.h`, a rule
 that does not reach into `scripts/`. The installed headers go to
 `firmware/micromouse/`, each keeping the previous copy as `.bak`.
+
+## export_splash.py
+
+`hardware/Splashscreen.png` — a two-tone 128x64 export of
+`hardware/Splashscreen.aseprite` — becomes `firmware/micromouse/splash_screen.h`,
+a `constexpr uint8_t[1024]` in the layout `Adafruit_GFX::drawBitmap` reads.
+`oledSplash.h` blits it once from `setup()`, so it holds the panel through
+bring-up until the first `OLEDScreen` frame overwrites it.
+
+Unlike `build_maze.sh` this needs nothing from `path-planning/`: it imports no
+local modules and declares `pillow` in a PEP 723 block, so `uv run --script`
+resolves it on its own. `build.sh --flash` runs it that way.
+
+Two things are hard errors rather than something the script fixes up — art that
+is not exactly 128x64, and art holding any value between black and white. Both
+mean re-exporting from Aseprite, because rescaling or thresholding here would put
+pixels on the robot that nobody drew, and the panel has no grey to render with.
+Nothing is written unless the bytes actually change, so an unchanged re-export
+does not restamp the header's mtime and send `arduino-cli` rebuilding.

@@ -24,8 +24,8 @@ Six directories, each with its own README:
 | [`firmware/`](firmware/) | the robot. `micromouse.ino` plus the header-only libraries it is built from | C++17, Arduino |
 | [`firmware-sim/`](firmware-sim/) | `micromouse.ino`'s control loop with a simulated robot underneath it, and 257 tests over it | Python, stdlib only |
 | [`path-planning/`](path-planning/) | photo in, `maze_map.h` and `maze_path.h` out | Python + OpenCV/NumPy/SciPy, via `uv` |
-| [`scripts/`](scripts/) | every shell entry point: `build.sh` compiles the sketch, `build_maze.sh` runs the photo-to-headers pipeline | zsh |
-| [`hardware/`](hardware/) | CAD for the printed chassis and the maze wall panels | Bambu Studio, Grasshopper |
+| [`scripts/`](scripts/) | every entry point: `build.sh` compiles the sketch, `build_maze.sh` runs the photo-to-headers pipeline, `export_splash.py` turns the splash art into a bitmap | zsh, Python |
+| [`hardware/`](hardware/) | CAD for the printed chassis and the maze wall panels, and the OLED splash art | Bambu Studio, Grasshopper, Aseprite |
 | [`notes/`](notes/) | course handouts and working notes. Nothing here is read by any code | PDF, JPEG |
 
 Both scripts take `--help`, run from any directory, and derive their paths from
@@ -42,7 +42,7 @@ differential base, with everything but the motors and encoders on one I2C bus.
 | DRV8835 H-bridge | PWM on `xEN`, direction on `xPH` | `pins.h` |
 | MPU6050 IMU | gyro Z only; accelerometer measured and left unused | `imu.h`, `observers.h` |
 | 3 × VL6180X ToF | front / left / right, addresses `0x30`–`0x32`, re-addressed at boot over their GPO pins | `lidar.h` |
-| SSD1306 OLED 128×64 | one screen for every task: the map on the left, the run's numbers on the right | `oledDisplay.h`, `oledScreen.h` |
+| SSD1306 OLED 128×64 | a splash through bring-up, then one screen for every task: the map on the left, the run's numbers on the right | `oledDisplay.h`, `oledScreen.h`, `oledSplash.h` |
 
 Pin assignment lives in one place, `firmware/micromouse/pins.h`. Every tunable
 number lives in one place, `firmware/micromouse/constants.h`, and each one
@@ -152,11 +152,13 @@ stepping +x and West stepping +y, so a route `MazeMapper` produces feeds
 **Units are mm, radians and seconds,** everywhere, including inside the
 generated headers.
 
-**`maze_map.h` and `maze_path.h` are generated.** Do not hand-edit them; re-run
-`build_maze.sh`. Each keeps the previous copy as `.bak` beside it. `maze_map.h`
+**`maze_map.h`, `maze_path.h` and `splash_screen.h` are generated.** Do not
+hand-edit them; the `snake_case` name is the signal. Re-run `build_maze.sh` for
+the first two, which each keep the previous copy as `.bak` beside it: `maze_map.h`
 records the photo, the lattice fit RMS and the start pose it was exported
 against; `maze_path.h` records the start and goal cells, the turn radius and the
-same frame note.
+same frame note. `splash_screen.h` is the OLED logo, and `build.sh --flash`
+re-exports it from `hardware/Splashscreen.png` on its own.
 
 **Numbers that appear in two languages are mirrored, not shared.**
 `firmware/micromouse/constants.h`, `firmware-sim/constants.py` and the geometry

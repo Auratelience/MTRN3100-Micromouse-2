@@ -273,6 +273,21 @@ class PSPlanner {
         return appendGridPose(next);
     }
 
+    // n forward steps as one pose rather than n, so a straight run is driven as
+    // a single seek. PosePlanner finishes every pose with Align, which commands
+    // zero forward velocity, so a straight built one cell at a time stops dead
+    // at each intermediate centre to re-align a heading that was already right.
+    //
+    // n == 0 is a no-op and not an error: a caller collapsing runs out of an
+    // instruction string should not have to special-case the empty run.
+    bool addForward(uint16_t n) {
+        if (pathLen == 0) return false;
+        if (n == 0) return true;
+        GridPose next = instructions[pathLen - 1];
+        for (uint16_t i = 0; i < n; ++i) next = stepForward(next);
+        return appendGridPose(next);
+    }
+
     Velocity update(const Pose& pose, float dt) {
         if (pathIdx >= pathLen) {
             return {0, 0};

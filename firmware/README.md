@@ -66,14 +66,15 @@ seen.
 | `mazeMapper.h` | frontier exploration of an unknown N×N maze, and the shortest route through what the exploration actually saw. Cells only — no sensor, no motor, no pose |
 | `mazeRunner.h` | `MazeMapper` closed loop against the robot: `Init → Explore → Plan → Race → Done`, non-blocking, one `update()` per tick |
 | `mazeWallMap.h` | a `Map`-shaped view of the mapper's wall bits, so `LidarObserver` can localise against discovered walls. Derives every obstacle on demand and stores nothing |
-| `maze_map.h`, `maze_path.h` | **generated** — see below |
+| `maze_map.h`, `maze_path.h`, `splash_screen.h` | **generated** — see below |
 
-The display is two headers, and one screen serves every task:
+The display is three headers, and one screen serves every task:
 
 | header | owns |
 | --- | --- |
 | `oledDisplay.h` | the only owner of the SSD1306 — one framebuffer, one `begin()`, and the `OLED_REFRESH_MS` throttle. Also `OLEDView`, the mm → px projection |
 | `oledScreen.h` | `OLEDScreen` — the map as *geometry* in a 64 px pane on the left (every panel a line at its own angle, every post and cylinder a filled disc, the route a polyline, the robot a dot and a heading tick), and five rows of values on the right. Templated on the map type, so it draws either `Map<S>` or `MazeWallMap` |
+| `oledSplash.h` | `drawSplash()` — the logo from the generated `splash_screen.h`, blitted once during bring-up |
 
 The values pane is the mode, then `X`, `Y` and `T` from the pose, then one
 percentage whose meaning travels with its label — `E` for cells explored, `P`
@@ -88,6 +89,32 @@ for distance along a route:
 |                           | E    42%    |  metric
 +---------------------------+-------------+
 ```
+
+Before any of that, `setup()` calls `drawSplash()` in place of a `clear()`, so
+the panel shows the logo for the rest of bring-up and the first `OLEDScreen`
+frame in `loop()` overwrites it. There is no splash state to leave and nothing in
+`loop()` to gate: the run display is reached by the run starting. A `delay()`
+after the call holds it longer.
+
+**The OLED block belongs directly under the I2C bring-up, and moving it is what
+breaks the splash.** `display.init()` needs nothing but `Wire`, and the logo is
+on screen for exactly as long as the bring-up *below* it takes. Almost all of
+that is `imu_obsv.init()`, which spends `IMU_STARTUP_SETTLE_MS` settling and then
+a `IMU_CALIBRATION_MS` window averaging the gyro's zero-rate output — 3 s in
+which the robot is required to stand still anyway. With the lidar's ~90 ms of
+settle delays after it, the splash holds for about 3.2 s and needs no `delay()`
+of its own.
+
+It was written at the end of `setup()` first, after both of those, where all that
+was left to outlast were two `Serial` prints and `taskBegin()`: the logo was gone
+inside ~10 ms and the only visible effect was the `clearDisplay()` inside
+`display.init()` — a black blink.
+
+Deliberately, `drawSplash()` does not ask `OLEDDisplay::due()`. That throttle is
+*consuming* and opens once per `OLED_REFRESH_MS`, so a lone frame going through
+it would be swallowed whenever bring-up had already drawn inside the window — and
+the milliseconds of I2C it exists to protect are a cost `loop()` has, not
+`setup()`.
 
 Everything on it arrives through an `etl::delegate`, so the screen knows nothing
 about `MotionPlanner`, `MazeRunner` or `MazeMapper`. The map extent it fits to
@@ -236,6 +263,16 @@ the entire reason `build_maze.sh` exists rather than two separate invocations.
 `planner.appendSegment(...)` statements, `#include`d *inside* `setup()`.
 
 `.bak` beside each is the previous installed copy, kept by the wrapper.
+
+`splash_screen.h` is separate from those two and unrelated to the maze:
+`scripts/export_splash.py` writes it from `hardware/Splashscreen.png` as a
+`constexpr uint8_t[1024]` in `drawBitmap`'s own layout — row-major, 16 bytes per
+row, MSB leftmost, a set bit lit — so it is in flash and costs no RAM either.
+`scripts/build.sh --flash` re-exports it before every compile it is going to
+upload, because a stale logo is invisible until the panel lights up. Its
+`snake_case` name is the same signal the maze headers carry: **generated, do not
+edit by hand.** The hand-written half is `oledSplash.h`, which is what a change
+to how the splash is *drawn* should touch.
 
 ## Things that will bite
 

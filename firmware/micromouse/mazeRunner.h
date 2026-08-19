@@ -114,8 +114,11 @@ class MazeRunner {
                static_cast<float>(MazeMapper<N>::MAX_CELLS);
     }
 
-    // One notch per instruction. setStart contributes a pose of its own, so a
-    // route of k instructions has len() == k + 1.
+    // One notch per pose in the planner's sequence, not per cell: addRaceRoute
+    // merges a straight run into a single pose, so a route ending in a long
+    // corridor advances in coarse steps near the end. Monotone either way, and
+    // it is a meter, not a distance. setStart contributes a pose of its own, so
+    // a sequence of k moves has len() == k + 1.
     float raceProgress() const {
         if (planner.len() <= 1) return 0.0f;
         return static_cast<float>(planner.idx()) / static_cast<float>(planner.len() - 1);
@@ -273,6 +276,38 @@ class MazeRunner {
         return planner.addInstructions(ins);
     }
 
+    // Feeds the mapper's instruction string to the planner with straights
+    // merged: the string is one 'f' per cell, and a run of them is one move.
+    //
+    // Only the race route goes through here. beginMove issues a single 'f' per
+    // step, so collapsing would do nothing during exploration, and keeping that
+    // path on addInstructions leaves MazeMapper's commit-once rule exactly as
+    // it was -- one planned move, one arrival, one commitMove.
+    bool addRaceRoute(const etl::string<MAZE_INSTRUCTION_MAX_LEN>& ins) {
+        size_t i = 0;
+        while (i < ins.size()) {
+            if (ins[i] == 'f') {
+                uint16_t n = 0;
+                while (i < ins.size() && ins[i] == 'f') {
+                    ++n;
+                    ++i;
+                }
+                if (!planner.addForward(n)) return false;
+                continue;
+            }
+
+            // Anything that is not an 'f' is a turn, and toInstructions only
+            // ever emits the three. A stray character would be read as a right
+            // turn, which is why the string is printed before it is driven.
+            const PSPlanner::Instruction turn = ins[i] == 'l'
+                                                    ? PSPlanner::Instruction::Left
+                                                    : PSPlanner::Instruction::Right;
+            if (!planner.addInstruction(turn)) return false;
+            ++i;
+        }
+        return true;
+    }
+
     // Builds the route the exploration earned and re-seeds the planner with it.
     void plan() {
         if (mapper.faulted()) {
@@ -328,7 +363,7 @@ class MazeRunner {
         const Cell s = mapper.startPosition();
         const Cell origin = mapper.startPosition();
         if (!planner.setStart(cellToGridPose(s.x, s.y, mapper.heading(), origin.x, origin.y)) ||
-            !planner.addInstructions(instructions)) {
+            !addRaceRoute(instructions)) {
             Serial.println(F("PLANNER REJECTED THE ROUTE"));
             runState = State::Done;
             return;

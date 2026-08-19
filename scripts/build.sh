@@ -85,6 +85,37 @@ sys.exit(1)
 ' "$FQBN"
 }
 
+# Re-export firmware/micromouse/splash_screen.h from hardware/Splashscreen.png.
+#
+# The header is committed, but the PNG is the source of truth, and a binary
+# carrying a stale export of it is the one kind of wrong build that is invisible
+# until the panel lights up — so a run that is going to upload regenerates it
+# first. The exporter rewrites nothing when the bytes match, so an unchanged
+# PNG does not restamp the header's mtime.
+#
+# Missing uv or missing art is a warning, not a failure: the committed header is
+# still good, and refusing to flash over it would be worse than flashing it. An
+# exporter that runs and *fails* is a real error, and set -e takes it.
+regenerate_splash() {
+	local script=$REPO_DIR/scripts/export_splash.py
+	local art=$REPO_DIR/hardware/Splashscreen.png
+
+	if [[ ! -f $script ]]; then
+		print -u2 -- "$ME: $script missing; keeping the committed splash header"
+		return 0
+	fi
+	if [[ ! -f $art ]]; then
+		print -u2 -- "$ME: $art missing; keeping the committed splash header"
+		return 0
+	fi
+	if ! command -v uv >/dev/null; then
+		print -u2 -- "$ME: uv not found; keeping the committed splash header"
+		return 0
+	fi
+
+	uv run --script "$script" "$art"
+}
+
 usage() {
 	cat <<EOF
 Usage: ./scripts/build.sh [target] [--db] [--flash] [--port dev] [--help]
@@ -124,6 +155,11 @@ Options:
               *before* the build, so an unplugged board fails immediately
               rather than after a full compile. Incompatible with --db, which
               produces no binary to upload.
+
+              Also re-exports firmware/micromouse/splash_screen.h from
+              hardware/Splashscreen.png first, so the logo on the panel is
+              always the current art. A plain build skips that and compiles the
+              committed header; run scripts/export_splash.py for the art alone.
   --port dev  Skip that detection and upload to this port, e.g.
               --port /dev/cu.usbmodem2101. Only meaningful with --flash.
   --help      Show this message.
@@ -213,6 +249,15 @@ if ((flash)); then
 		BOARD=${detected#*$'\t'}
 	fi
 	echo "will flash $BOARD on $PORT"
+fi
+
+# After the port check, so an unplugged board still fails first, and before the
+# compile, so the regenerated header is the one that gets built. Only for the
+# micromouse target, which is the only sketch with a panel to draw on. A plain
+# build is the fast inner loop and compiles the committed header as it stands —
+# run scripts/export_splash.py by hand to pick up an art change without a board.
+if ((flash)) && [[ $target == micromouse ]]; then
+	regenerate_splash
 fi
 
 # Empty the build dir but keep clangd's index cache.

@@ -12,6 +12,7 @@
 #include "motor.h"
 #include "observers.h"
 #include "oledDisplay.h"
+#include "oledSplash.h"
 #include "sensorFusion.h"
 #include "types.h"
 
@@ -117,6 +118,27 @@ void setup() {
     i2cRepairer.begin();
     Serial.println("\b\b\b [OKAY]");
 
+    // Straight after the bus and before everything slow, which is the whole
+    // point: display.init() needs nothing but Wire, and the splash is only
+    // on screen for as long as the bring-up *below* it takes. Down at the end
+    // of setup(), where this used to sit, the only things left to outlast were
+    // two Serial prints and taskBegin() -- so the logo was overwritten by the
+    // first loop() frame inside ~10 ms and all that showed was the clear.
+    //
+    // What makes it readable now is imu_obsv.init(), which is not a settle
+    // delay but a 3 s measurement: IMU_STARTUP_SETTLE_MS then a
+    // IMU_CALIBRATION_MS window averaging the gyro's zero-rate output. With the
+    // lidar's ~90 ms on top, the logo holds for about 3.2 s, so it needs no
+    // delay() of its own -- it is showing during time the robot was already
+    // going to spend standing still.
+    Serial.print("Initialising OLED...");
+    if (!display.init()) {
+        Serial.println("\b\b\b [OLED INIT FAILED]");
+    } else {
+        drawSplash(display);
+        Serial.println("\b\b\b [OKAY]");
+    }
+
     Serial.print("Initialising Motors...");
     leftMotor.init();
     rightMotor.init();
@@ -147,14 +169,6 @@ void setup() {
     // the branch above, which was harmless only while nothing on the pose side
     // integrated anything.
     sf.set(Pose{0, 0, 0});
-
-    Serial.print("Initialising OLED...");
-    if (!display.init()) {
-        Serial.println("\b\b\b [OLED INIT FAILED]");
-    } else {
-        display.clear();
-        Serial.println("\b\b\b [OKAY]");
-    }
 
     Serial.print("Loading goal...");
 
