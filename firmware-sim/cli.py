@@ -381,8 +381,8 @@ def parser():
         nargs="?",
         default="planned",
         choices=[*SCENARIOS, "planned"],
-        help="which block of micromouse.ino to reproduce (default: planned, "
-             "the one that is uncommented today)",
+        help="which configuration of micromouse.ino to reproduce (default: "
+             "planned, which mirrors task42.h)",
     )
 
     g = p.add_argument_group("path and map (the `planned` scenario)")

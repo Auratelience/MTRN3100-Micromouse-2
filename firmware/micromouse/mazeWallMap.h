@@ -27,7 +27,7 @@
 // tick is available to the next solve.
 //
 // Duck-typed against Map<S> rather than derived from it. LidarObserver and
-// OLEDPath need only cast(), candidates(), size(), present() and operator[],
+// OLEDScreen need only cast(), candidates(), size(), present() and operator[],
 // and templating them on the map type keeps both working with either -- the
 // exported map for tasks 4.1 and 4.2, this one for 4.3.
 //
@@ -152,8 +152,6 @@ class MazeWallMap {
     private:
 
     const MazeMapper<N>& mapper;
-
-    using Cell = typename MazeMapper<N>::Cell;
 
     static Cell cell(int x, int y) {
         return Cell{static_cast<int8_t>(x), static_cast<int8_t>(y)};

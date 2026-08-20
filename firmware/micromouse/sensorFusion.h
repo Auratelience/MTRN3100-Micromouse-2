@@ -28,7 +28,27 @@ struct ObserverPTrust {
 };
 
 namespace FusionWeights {
-    constexpr float PoseCorrectionGain = 0.2f;
+// How much of a pose observer's correction is taken per fusion cycle, per
+// axis. Split because the two axes are now corrected by different sensors with
+// very different standing: position comes from three lidar beams against a map,
+// heading from a gyro integrated on its own clock.
+//
+// Position stays low. A lidar fix is a least-squares solve against a map that
+// may be wrong -- MazeWallMap holds only the walls found so far -- and taking
+// a fifth of it per cycle averages several solves before the estimate has
+// moved far, so one bad association drags nothing very far.
+//
+// Heading is high, because there is nothing to average against. ImuObserver is
+// the only source weighted for theta, and the dead reckoning it corrects is
+// wheel rotation through an AXLE_LEN that was never calibrated for turning --
+// the worse of the two, not a second opinion. At 0.8 the fused heading is
+// effectively the gyro's, with the wheels contributing only a transient, which
+// is the intent.
+//
+// Both are per cycle, not per second, so the time constant they imply scales
+// with the loop rate: 0.8 at ~300 Hz settles in about 4 ms, 0.2 in about 17 ms.
+constexpr float PositionCorrectionGain = 0.2f;
+constexpr float ThetaCorrectionGain    = 0.8f;
 
     constexpr ObserverPTrust DefaultPTrust = ObserverPTrust{1, 1, 1};
     constexpr ObserverPTrust ThetaPTrust   = ObserverPTrust{0, 0, 1};
@@ -77,7 +97,8 @@ class SensorFusion {
     SensorFusion(
         etl::span<const VelocitySource> velocitySrcs,
         etl::span<const PoseSource> poseSrcs = {},
-        float poseCorrectionGain             = FusionWeights::PoseCorrectionGain
+        float positionCorrectionGain         = FusionWeights::PositionCorrectionGain,
+        float thetaCorrectionGain            = FusionWeights::ThetaCorrectionGain
     ) :
         estimate(*this),
         modelObserver(
@@ -87,7 +108,8 @@ class SensorFusion {
         ),
         fusedVelocity({0, 0}),
         fusedPose({0, 0, 0}),
-        poseCorrectionGain(poseCorrectionGain) {
+        positionCorrectionGain(positionCorrectionGain),
+        thetaCorrectionGain(thetaCorrectionGain) {
         const size_t nv = etl::min(velocitySrcs.size(), velocitySources.max_size());
         for (size_t i = 0; i < nv; ++i)
             velocitySources.push_back(velocitySrcs[i]);
@@ -183,23 +205,21 @@ class SensorFusion {
             dthetaTotal += t.thetaTrust * dtheta;
         }
 
-        // Coefficient of how much observers affect dead reckoning
-
         return Pose{
             .x =
                 (xWeightTotal <= 0.0f
                         ? dead_reckoned.x
                         : dead_reckoned.x +
-                              poseCorrectionGain * (xTotal / xWeightTotal - dead_reckoned.x)),
+                              positionCorrectionGain * (xTotal / xWeightTotal - dead_reckoned.x)),
             .y =
                 (yWeightTotal <= 0.0f
                         ? dead_reckoned.y
                         : dead_reckoned.y +
-                              poseCorrectionGain * (yTotal / yWeightTotal - dead_reckoned.y)),
+                              positionCorrectionGain * (yTotal / yWeightTotal - dead_reckoned.y)),
             .theta = wrapAngle(
                 dthetaWeightTotal <= 0.0f
                     ? dead_reckoned.theta
-                    : dead_reckoned.theta + poseCorrectionGain * dthetaTotal / dthetaWeightTotal
+                    : dead_reckoned.theta + thetaCorrectionGain * dthetaTotal / dthetaWeightTotal
             ),
         };
     }
@@ -211,7 +231,8 @@ class SensorFusion {
 
     Velocity fusedVelocity;
     Pose fusedPose;
-    float poseCorrectionGain;
+    float positionCorrectionGain;
+    float thetaCorrectionGain;
 };
 
 #pragma GCC pop_options

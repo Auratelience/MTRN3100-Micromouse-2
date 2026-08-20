@@ -9,7 +9,6 @@
 #include <Arduino.h>
 
 #include <Embedded_Template_Library.h>
-#include <etl/algorithm.h>
 #include <etl/span.h>
 #include <etl/string.h>
 
@@ -43,8 +42,6 @@ template <size_t N>
 class MazeRunner {
     public:
 
-    using Cell = typename MazeMapper<N>::Cell;
-
     enum class State : uint8_t { Init, Explore, Plan, Race, Done };
 
     MazeRunner(
@@ -61,99 +58,44 @@ class MazeRunner {
     // or goal cell.
     //
     // Priors have to land here, before the first observe(): markWall refuses a
-    // boundary the robot has already driven through, and a corner sealed after
-    // the search had planned into it would be too late anyway.
+    // boundary the robot has already driven through.
     bool begin() {
         runState = State::Done;
         if (!mapper.begin()) return false;
 
         const Cell start = mapper.startPosition();
 
-        croppedCells   = sealCroppedCells();
+        croppedCells = sealCroppedCells();
         reachableCells = static_cast<uint16_t>(MazeMapper<N>::MAX_CELLS - croppedCells);
 
-        // observe() only ever sees the three sides the sensors face, so the
-        // side the robot came in through is never sensed -- and the start cell
-        // was never entered. Without this planMove will reverse out of it on
-        // the first move.
-        mapper.markWall(start, backOf(mapper.startHeading()));
+
+        // The start cell's fourth side is the one thing the sensors cannot
+        // settle from where they sit: observe() reads front, left and right, and
+        // the robot never drove in through the back. So look at it -- see
+        // stepExploration -- rather than assume a wall is there, which would
+        // invent one in the middle of the maze on any run that does not start
+        // against a boundary, and keep it for the rest of the run: observe()
+        // only ever adds walls, and only a driven boundary is ever cleared.
+        //
+        // Unless the perimeter settled it already, which it has whenever the
+        // start cell backs onto the edge of the maze.
+        lookBehind = !mapper.hasWall(start, backOf(mapper.startHeading()));
 
         moveInFlight = false;
+        turnInFlight = false;
         routeLen     = 0;
         runState     = State::Explore;
         return true;
     }
 
-    Velocity update(const Pose& pose, float dt) {
-        switch (runState) {
-            case State::Explore: return explore(pose, dt);
-            case State::Plan:    plan(); return Velocity{0, 0};
-            case State::Race:    return race(pose, dt);
-            default:             return Velocity{0, 0};
-        }
-    }
+    uint16_t croppedCells   = 0;
+    uint16_t reachableCells = MazeMapper<N>::MAX_CELLS;
 
-    State state() const { return runState; }
-
-    // True once the run is driving a planned route rather than discovering
-    // one. The sketch selects which display to draw from this.
-    bool racing() const { return runState == State::Race || runState == State::Done; }
-
-    const MazeMapper<N>& map() const { return mapper; }
-
-    uint16_t cropped() const { return croppedCells; }
-
-    uint16_t reachable() const { return reachableCells; }
-
-    // The discovered route in millimetres, one point per cell, empty until
-    // Plan has run.
-    etl::span<const Vec2D> route() const {
-        return etl::span<const Vec2D>(routePoints.data(), routeLen);
-    }
-
-    // Still under-reads whenever part of the maze is walled off, because the
-    // reachable count is not known until the sweep finishes. That is why it is
-    // a meter and not a completion test -- doneExploring() is the test. The
-    // cropped corners are the part that is known up front, and leaving them in
-    // the denominator would peg a finished sweep at 86%.
-    float exploreProgress() const {
-        if (reachableCells == 0) return 0.0f;
-        return static_cast<float>(mapper.visitedCount()) / static_cast<float>(reachableCells);
-    }
-
-    // One notch per instruction. setStart contributes a pose of its own, so a
-    // route of k instructions has len() == k + 1.
-    float raceProgress() const {
-        if (planner.len() <= 1) return 0.0f;
-        return static_cast<float>(planner.idx()) / static_cast<float>(planner.len() - 1);
-    }
-
-    // True for a cell the physical maze does not have. Every corner is
-    // chamfered, so a cell within MAZE_CORNER_CROP steps of a corner --
-    // Manhattan, measured from the corner cell -- is missing. At 1 that is the
-    // corner plus its two orthogonal neighbours: three cells per corner,
-    // twelve in all.
     static bool croppedCell(int x, int y) {
         const int dx = etl::min<int>(x, static_cast<int>(N) - 1 - x);
         const int dy = etl::min<int>(y, static_cast<int>(N) - 1 - y);
         return (dx + dy) <= static_cast<int>(MAZE_CORNER_CROP);
     }
-
-    private:
-
-    LIDAR& lidar;
-    PSPlanner& planner;
-    MazeMapper<N> mapper;
-
-    State runState        = State::Init;
-    bool moveInFlight     = false;
-    Direction pendingMove = North;
-
-    uint16_t croppedCells   = 0;
-    uint16_t reachableCells = MazeMapper<N>::MAX_CELLS;
-
-    std::array<Vec2D, MazeMapper<N>::MAX_CELLS> routePoints;
-    uint16_t routeLen = 0;
 
     uint16_t sealCroppedCells() {
         uint16_t n = 0;
@@ -167,24 +109,99 @@ class MazeRunner {
         return n;
     }
 
+    Velocity update(const Pose& pose, float dt) {
+        switch (runState) {
+            case State::Explore: return explore(pose, dt);
+            case State::Plan:    plan(); return Velocity{0, 0};
+            case State::Race:    return race(pose, dt);
+            default:             return Velocity{0, 0};
+        }
+    }
+
+    State state() const { return runState; }
+
+    MazeMapper<N> mapper;
+
+    // The discovered route in millimetres, one point per cell, empty until
+    // Plan has run.
+    etl::span<const Vec2D> route() const {
+        return etl::span<const Vec2D>(routePoints.data(), routeLen);
+    }
+
+    // Fraction of the grid the sweep has stood in. Under-reads whenever part of
+    // the maze is walled off or missing, because how many cells are actually
+    // reachable is not known until the sweep finishes. That is why it is a
+    // meter and not a completion test -- doneExploring() is the test.
+    float exploreProgress() const {
+        return static_cast<float>(mapper.visitedCount()) /
+               static_cast<float>(MazeMapper<N>::MAX_CELLS);
+    }
+
+    // One notch per pose in the planner's sequence, not per cell: addRaceRoute
+    // merges a straight run into a single pose, so a route ending in a long
+    // corridor advances in coarse steps near the end. Monotone either way, and
+    // it is a meter, not a distance. setStart contributes a pose of its own, so
+    // a sequence of k moves has len() == k + 1.
+    float raceProgress() const {
+        if (planner.len() <= 1) return 0.0f;
+        return static_cast<float>(planner.idx()) / static_cast<float>(planner.len() - 1);
+    }
+
+    private:
+
+    LIDAR& lidar;
+    PSPlanner& planner;
+
+    State runState        = State::Init;
+    bool moveInFlight     = false;
+    Direction pendingMove = North;
+
+    // What is in flight is a rotation on the spot rather than a step, so it
+    // commits as a turn. Only ever set for the look behind at the start.
+    bool turnInFlight = false;
+
+    // The look behind is still owed. Cleared the moment it is started, so it
+    // happens once even though stepExploration runs every arrival.
+    bool lookBehind = false;
+
+    std::array<Vec2D, MazeMapper<N>::MAX_CELLS> routePoints;
+    uint16_t routeLen = 0;
+
     Velocity explore(const Pose& pose, float dt) {
         if (!moveInFlight) {
             stepExploration();
+            // DIAGNOSTIC: open the per-move accounting here, the first tick
+            // that has a pose to open it with.
+            diagSwept = 0.0f;
+            diagMaxDt = 0.0f;
+            diagTicks = 0;
+            diagTheta = pose.theta;
             return Velocity{0, 0};
         }
+
+        // DIAGNOSTIC: the total angle the estimate says has been swept, not the
+        // net change -- an over-rotation that is later corrected nets out, and
+        // the sweep is what is actually watched from outside.
+        diagSwept += fabsf(wrapAngle(pose.theta - diagTheta));
+        diagTheta = pose.theta;
+        if (dt > diagMaxDt) diagMaxDt = dt;
+        ++diagTicks;
 
         const Velocity desired = planner.update(pose, dt);
         if (!planner.done()) return desired;
 
         // Only now, and exactly once: the robot has physically arrived, which
-        // is the whole precondition commitMove has.
-        if (!mapper.commitMove(pendingMove)) {
+        // is the whole precondition commitMove and commitTurn share.
+        const bool committed = turnInFlight ? mapper.commitTurn(pendingMove)
+                                            : mapper.commitMove(pendingMove);
+        if (!committed) {
             Serial.println(F("COMMIT REJECTED"));
             runState = State::Done;
         } else {
-            trace("commit", pendingMove);
+            trace(turnInFlight ? "turned" : "commit", pendingMove);
         }
         moveInFlight = false;
+        turnInFlight = false;
         return desired;
     }
 
@@ -208,6 +225,29 @@ class MazeRunner {
         Serial.print(front);
         Serial.print(left);
         Serial.println(right);
+
+        // Before the first move is ever planned, and only then: turn to put a
+        // sensor on the one side of the start cell nobody has looked at.
+        //
+        // Ninety degrees is enough, and left is as good as right -- after a left
+        // turn the left sensor points where the back did, since turning left
+        // twice is turning around. The reading lands in the observe() above on
+        // the next pass, with no special case: from the new heading it is simply
+        // what is on the left.
+        if (lookBehind) {
+            lookBehind = false;
+            const Direction look = leftOf(mapper.heading());
+            trace("look", look);
+            if (!beginTurn(look)) {
+                Serial.println(F("PLANNER REJECTED THE LOOK"));
+                runState = State::Done;
+                return;
+            }
+            pendingMove  = look;
+            moveInFlight = true;
+            turnInFlight = true;
+            return;
+        }
 
         Direction move;
         if (!mapper.planMove(move)) {
@@ -244,6 +284,52 @@ class MazeRunner {
         return planner.addInstructions(ins);
     }
 
+    // beginMove without the step: the turns alone, leaving the robot facing a
+    // new way in the cell it is already in. Commit it with commitTurn, not
+    // commitMove -- nothing has moved.
+    bool beginTurn(Direction to) {
+        etl::string<MAZE_INSTRUCTION_MAX_LEN> ins;
+        Direction d = mapper.heading();
+        if (!appendTurns(ins, d, to)) return false;
+
+        const Cell c = mapper.position();
+        const Cell origin = mapper.startPosition();
+        if (!planner.setStart(cellToGridPose(c.x, c.y, mapper.heading(), origin.x, origin.y))) return false;
+        return planner.addInstructions(ins);
+    }
+
+    // Feeds the mapper's instruction string to the planner with straights
+    // merged: the string is one 'f' per cell, and a run of them is one move.
+    //
+    // Only the race route goes through here. beginMove issues a single 'f' per
+    // step, so collapsing would do nothing during exploration, and keeping that
+    // path on addInstructions leaves MazeMapper's commit-once rule exactly as
+    // it was -- one planned move, one arrival, one commitMove.
+    bool addRaceRoute(const etl::string<MAZE_INSTRUCTION_MAX_LEN>& ins) {
+        size_t i = 0;
+        while (i < ins.size()) {
+            if (ins[i] == 'f') {
+                uint16_t n = 0;
+                while (i < ins.size() && ins[i] == 'f') {
+                    ++n;
+                    ++i;
+                }
+                if (!planner.addForward(n)) return false;
+                continue;
+            }
+
+            // Anything that is not an 'f' is a turn, and toInstructions only
+            // ever emits the three. A stray character would be read as a right
+            // turn, which is why the string is printed before it is driven.
+            const PSPlanner::Instruction turn = ins[i] == 'l'
+                                                    ? PSPlanner::Instruction::Left
+                                                    : PSPlanner::Instruction::Right;
+            if (!planner.addInstruction(turn)) return false;
+            ++i;
+        }
+        return true;
+    }
+
     // Builds the route the exploration earned and re-seeds the planner with it.
     void plan() {
         if (mapper.faulted()) {
@@ -254,17 +340,28 @@ class MazeRunner {
             return;
         }
 
-        // No arguments: a completed sweep unwinds the backtrack stack all the
-        // way out, so the robot is standing on the start cell and the route
-        // starts where it does.
+        // No arguments: a completed sweep routes itself home, so the robot is
+        // standing on the start cell and the route starts where it does.
         if (!mapper.buildShortestPathToGoal()) {
             Serial.println(F("NO ROUTE TO GOAL"));
             runState = State::Done;
             return;
         }
 
+        // From heading(), not startHeading(). The robot is back on the start
+        // cell but not on the heading it began the run on: the last step of the
+        // route home is whatever direction it came in from.
+        //
+        // The route survives getting this wrong -- the turns are relative and
+        // setStart replays them from the same heading, so the poses land on the
+        // same cells facing the same way either way. What it costs is the first
+        // move: claim a heading the robot is not on and the opening rotation is
+        // missing from the sequence, so instead of turning on the spot and
+        // driving straight the robot slews into the first cell from whatever
+        // angle it was left at. It also makes the instruction string printed
+        // below a description of a run nobody made.
         etl::string<MAZE_INSTRUCTION_MAX_LEN> instructions;
-        if (!mapper.toInstructions(instructions)) {
+        if (!mapper.toInstructions(instructions, mapper.heading())) {
             Serial.println(F("ROUTE TOO LONG"));
             runState = State::Done;
             return;
@@ -287,8 +384,8 @@ class MazeRunner {
 
         const Cell s = mapper.startPosition();
         const Cell origin = mapper.startPosition();
-        if (!planner.setStart(cellToGridPose(s.x, s.y, mapper.startHeading(), origin.x, origin.y)) ||
-            !planner.addInstructions(instructions)) {
+        if (!planner.setStart(cellToGridPose(s.x, s.y, mapper.heading(), origin.x, origin.y)) ||
+            !addRaceRoute(instructions)) {
             Serial.println(F("PLANNER REJECTED THE ROUTE"));
             runState = State::Done;
             return;
@@ -314,8 +411,24 @@ class MazeRunner {
         Serial.print(',');
         Serial.print(mapper.position().y);
         Serial.print(F(" -> "));
-        Serial.println(directionChar(d));
+        Serial.print(directionChar(d));
+        // DIAGNOSTIC: swept is what the estimate believes. Compare it against
+        // what the robot physically did: they agree, and the command loop drove
+        // the extra rotation; they disagree, and the heading estimate did.
+        Serial.print(F(" | swept "));
+        Serial.print(diagSwept * RAD_TO_DEG, 1);
+        Serial.print(F("deg ticks "));
+        Serial.print(diagTicks);
+        Serial.print(F(" maxdt "));
+        Serial.print(diagMaxDt * 1000.0f, 1);
+        Serial.println(F("ms"));
     }
+
+    // DIAGNOSTIC
+    float diagSwept   = 0.0f;
+    float diagTheta   = 0.0f;
+    float diagMaxDt   = 0.0f;
+    uint16_t diagTicks = 0;
 };
 
 #pragma GCC pop_options

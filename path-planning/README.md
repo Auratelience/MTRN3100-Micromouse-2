@@ -53,15 +53,29 @@ fail silently if ignored:
   mirrors and flips every `Left`/`Right` with it, then re-origins the path onto
   the robot's start pose so it can be pasted against a fresh odometry frame.
 
+`--scale k` resizes the emitted path, and only the emitted path, on the way out:
+endpoints and arc radii multiply by `k`, curvature divides by it, turn directions
+stand. The map, the clearance report and the overlay stay life size, so the
+guarantee above stops holding — at anything but 1, the curve that was collision
+checked is not the curve that gets driven. Scaling up is the sharper edge: past
+1000 mm a radius falls under `STRAIGHT_TOLERANCE` and the firmware drives the
+chord instead of the arc, so `check` runs again on the scaled path and reports it.
+`build_maze.sh --scale` passes the factor to the planner alone and warns that the
+`maze_map.h` beside it is still life size.
+
 `selftest.py` checks both against an independent computation, including a
 deliberately unrepresentable 270 deg arc that `segments.check` must reject.
 
 The demo defaults to `mazes/4.png`; the tests and benchmark pin `mazes/1.png` so
-their numbers stay comparable. All four photos in `mazes/` fit and map.
+their numbers stay comparable, and the headers currently installed in the
+firmware were exported from `mazes/5.png`.
 
-Only `2.jpg` and `3.jpg` are tracked, though, so both of those defaults are
-missing from a fresh clone — pass an image explicitly, or restore the others.
-See [`mazes/README.md`](mazes/README.md) for what a usable photo needs.
+**No photo is tracked.** `.gitignore` excludes `*.png` and `*.jpg`, so `mazes/`
+arrives empty from a fresh clone and every one of those defaults is missing —
+supply your own and pass it explicitly. The numbers quoted throughout this file
+are against the working set the figures were measured on (`1.png`, `4.png`,
+`5.png`), which is why they will not reproduce from a bare checkout. See
+[`mazes/README.md`](mazes/README.md) for what a usable photo needs.
 
 ## Posts
 

@@ -13,8 +13,7 @@ libraries it is assembled from.
 Build with `compile.sh` rather than calling `arduino-cli compile` directly: it
 empties `firmware/build` first, which is what keeps a build at ~15s instead of
 the 4+ minutes arduino-cli takes when it re-enters a populated build directory.
-`../compile.sh` is a forwarder for `../scripts/build.sh`, which takes the sketch
-to build as its first argument and defaults to this one.
+`../compile.sh` is a forwarder for `../scripts/build.sh`.
 
 Third-party libraries: **Embedded Template Library** (`etl/`), **Adafruit
 SSD1306** and **Adafruit GFX**, **VL6180X** (Pololu). Everything else in
@@ -29,18 +28,22 @@ libraries.
 
 ## The control loop
 
-`loop()` is four calls, at whatever rate the board manages (`dt` is measured,
+`loop()` is five calls, at whatever rate the board manages (`dt` is measured,
 not assumed; `MIN_LOOP_DT_S` only rejects a zero-length tick):
 
 ```
 i2cRepairer.update()      probe the bus, rebuild it if it has wedged
 sf.update(dt)             step every observer, fuse -> Pose + Velocity
-planner.update(pose, dt)  where am I on the path -> desired Velocity
+taskUpdate(pose, dt)      the selected task's planner -> desired Velocity
 mc.update(desired, ...)   IK -> per-wheel PID -> PWM
+taskRender()              the selected task's display, throttled internally
 ```
 
+Two of those five are hooks the task header supplies, which is what keeps
+`loop()` free of any `#if` — see [Task blocks](#task-blocks).
+
 Two rates are decoupled from that: the OLED refreshes every `OLED_REFRESH_MS`
-(≈58 Hz), and the VL6180Xs free-run at `LIDAR_CONTINUOUS_PERIOD_MS` (10 ms), so
+(≈24 Hz), and the VL6180Xs free-run at `LIDAR_CONTINUOUS_PERIOD_MS` (10 ms), so
 `LidarObserver` skips a solve rather than re-solving a reading it has already
 seen.
 
@@ -59,14 +62,73 @@ seen.
 | `sensorFusion.h` | `SensorFusion` — a trust-weighted blend of velocity sources and pose sources over the dead-reckoning model |
 | `lidar.h` | VL6180X driver: bring-up and re-addressing, status decoding, non-blocking reads |
 | `imu.h` | raw I2C MPU6050 driver with a rolling average |
-| `oled.h` | SSD1306 output. Takes `{label, callable}` pairs and lays them out in one or two columns |
 | `i2cRepairer.h` | I2C bring-up and runtime recovery |
-| `maze_map.h`, `maze_path.h` | **generated** — see below |
+| `mazeMapper.h` | frontier exploration of an unknown N×N maze, and the shortest route through what the exploration actually saw. Cells only — no sensor, no motor, no pose |
+| `mazeRunner.h` | `MazeMapper` closed loop against the robot: `Init → Explore → Plan → Race → Done`, non-blocking, one `update()` per tick |
+| `mazeWallMap.h` | a `Map`-shaped view of the mapper's wall bits, so `LidarObserver` can localise against discovered walls. Derives every obstacle on demand and stores nothing |
+| `maze_map.h`, `maze_path.h`, `splash_screen.h` | **generated** — see below |
+
+The display is three headers, and one screen serves every task:
+
+| header | owns |
+| --- | --- |
+| `oledDisplay.h` | the only owner of the SSD1306 — one framebuffer, one `begin()`, and the `OLED_REFRESH_MS` throttle. Also `OLEDView`, the mm → px projection |
+| `oledScreen.h` | `OLEDScreen` — the map as *geometry* in a 64 px pane on the left (every panel a line at its own angle, every post and cylinder a filled disc, the route a polyline, the robot a dot and a heading tick), and five rows of values on the right. Templated on the map type, so it draws either `Map<S>` or `MazeWallMap` |
+| `oledSplash.h` | `drawSplash()` — the logo from the generated `splash_screen.h`, blitted once during bring-up |
+
+The values pane is the mode, then `X`, `Y` and `T` from the pose, then one
+percentage whose meaning travels with its label — `E` for cells explored, `P`
+for distance along a route:
+
+```
++---------- 64 px ----------+--- 62 px ---+
+| walls as lines, obstacles | EXPL        |  mode
+| as filled circles, the    | X    340    |  mm
+| route as a polyline, the  | Y    128    |  mm
+| robot as a dot and a tick | T    -87    |  deg
+|                           | E    42%    |  metric
++---------------------------+-------------+
+```
+
+Before any of that, `setup()` calls `drawSplash()` in place of a `clear()`, so
+the panel shows the logo for the rest of bring-up and the first `OLEDScreen`
+frame in `loop()` overwrites it. There is no splash state to leave and nothing in
+`loop()` to gate: the run display is reached by the run starting. A `delay()`
+after the call holds it longer.
+
+**The OLED block belongs directly under the I2C bring-up, and moving it is what
+breaks the splash.** `display.init()` needs nothing but `Wire`, and the logo is
+on screen for exactly as long as the bring-up *below* it takes. Almost all of
+that is `imu_obsv.init()`, which spends `IMU_STARTUP_SETTLE_MS` settling and then
+a `IMU_CALIBRATION_MS` window averaging the gyro's zero-rate output — 3 s in
+which the robot is required to stand still anyway. With the lidar's ~90 ms of
+settle delays after it, the splash holds for about 3.2 s and needs no `delay()`
+of its own.
+
+It was written at the end of `setup()` first, after both of those, where all that
+was left to outlast were two `Serial` prints and `taskBegin()`: the logo was gone
+inside ~10 ms and the only visible effect was the `clearDisplay()` inside
+`display.init()` — a black blink.
+
+Deliberately, `drawSplash()` does not ask `OLEDDisplay::due()`. That throttle is
+*consuming* and opens once per `OLED_REFRESH_MS`, so a lone frame going through
+it would be swallowed whenever bring-up had already drawn inside the window — and
+the milliseconds of I2C it exists to protect are a cost `loop()` has, not
+`setup()`.
+
+Everything on it arrives through an `etl::delegate`, so the screen knows nothing
+about `MotionPlanner`, `MazeRunner` or `MazeMapper`. The map extent it fits to
+comes from `mapBounds()` in `types.h`, which is a property of the map rather than
+of the panel; only the projection that consumes it lives in `oledDisplay.h`.
 
 ### Planners
 
 All five expose the same shape: `update(pose, dt) -> Velocity`. Which one is
-live is decided by which TASK block is uncommented in the `.ino`.
+live is decided by the selected task header — see [Task blocks](#task-blocks).
+`MotionPlanner` is what `task42.h` drives; `PSPlanner` is what `task43.h`'s
+`MazeRunner` drives, and it drives each grid pose through a `PosePlanner` of its
+own. `HeadingPlanner` and `DistancePlanner` are reached only by `firmware-sim`'s
+retained 3.x scenarios.
 
 | planner | what it drives to |
 | --- | --- |
@@ -87,10 +149,14 @@ velocity forward) and blends two kinds of source into it.
 * `ImuObserver` — gyro Z, bias measured over 500 samples at rest in `init()`.
   The accelerometer is read but not integrated; it was too noisy to be useful.
 
-*Pose sources* produce a correction that is folded into dead reckoning at
-`PoseCorrectionGain` (0.2) per tick, so a fix nudges rather than teleports:
+*Pose sources* produce a correction that is folded into dead reckoning at the
+gain handed to `SensorFusion` — `0.1` in both task headers, against a
+`FusionWeights::PoseCorrectionGain` default of `0.2` — per tick, so a fix nudges
+rather than teleports:
 
-* `FrontLidarObserver` — front range as an x measurement. Used by TASK 3.2.
+* `FrontLidarObserver` — front range as an x measurement. No longer wired by
+  either task; `firmware-sim`'s `task32` scenario is the only thing that drives
+  it, and it ignores its mount offset (see below).
 * `LidarObserver<S>` — the real one. Casts the three beams into `MAZE_MAP`,
   gates each return (incidence angle, residual, implied heading), and runs a
   damped Levenberg–Marquardt solve for `(x, y, theta)` against a prior. The
@@ -109,8 +175,62 @@ velocity forward) and blends two kinds of source into it.
 
 ## Task blocks
 
-`micromouse.ino` carries one commented block per assessment task. Uncomment
-exactly one — each defines its own `obs_v`/`obs_p`, planner and setup body.
+The two current tasks live in `task42.h` and `task43.h`, and `micromouse.ino`
+picks one with a single `#define` near the top:
+
+```cpp
+#define TASK 43   // 42 -> task42.h, 43 -> task43.h
+```
+
+Anything other than 42 or 43 is an `#error`. The sketch itself holds only the
+shared hardware — motors, IMU, lidar, `obs_v`, `dt`, the display and the
+`MotionController` — plus a `setup()`/`loop()` skeleton with no `#if` in it.
+The selected header is included part way down, after the objects it builds on
+exist, and supplies the parts that differ:
+
+| | task42.h | task43.h |
+| --- | --- | --- |
+| the maze is | known — fitted by CV from a photo | unknown; finding it is the exercise |
+| pose source | `LidarObserver` over `MAZE_MAP` | `LidarObserver` over `MazeWallMap` |
+| motion | `MotionPlanner(10, 0.06, 200)` | `MazeRunner` over `PSPlanner(8, 8)` |
+| `taskBegin()` | `#include "maze_path.h"` | `runner.begin()` |
+| `taskRender()` | `OLEDScreen` over `MAZE_MAP`, mode `CV` | `OLEDScreen` over `MazeWallMap`, mode `EXPL`/`HOME`/`EXEC` |
+
+Both build `SensorFusion sf(obs_v, obs_p, 0.1)` and wire `setPrior()` in
+`setup()`. Those two go together: the observer needs the prior to be worth
+anything.
+
+Each builds exactly one `OLEDScreen` and draws it every tick, for every phase
+of the run. There is no renderer to select, which is what `OLEDDisplay::due()`
+being *consuming* asks for: it hands the refresh window to its first caller, so
+two renderers sharing a tick would silently starve whichever asked second.
+
+4.3's mode is the one place the display reads a phase that `MazeRunner` does not
+have. The leg back to the start cell is rule 3 of `MazeMapper::planMove` and sits
+inside `Explore`, so `MazeMapper` exposes `homing()` and `homeProgress()` and
+`screenMode()` folds them in — otherwise the screen would report `EXPL` for the
+whole return trip.
+
+The whole of 4.3's configuration is four lines at the top of `task43.h`:
+
+```cpp
+constexpr uint8_t MAZE_SIZE = 5;        // cells per side
+mazeMapper::Cell startCell = {0, 0};
+Direction startHeading     = North;
+mazeMapper::Cell goalCell  = {2, 4};
+```
+
+`MAZE_SIZE` sizes every templated class below it, and cost grows as N². Change
+those four and nothing else has to move.
+
+Both headers declare the same names — `lidar_obsv`, `obs_p`, `sf`,
+`fusedPose()` and the three `task*()` hooks — which is what lets `setup()` and
+`loop()` be written once. They are alternatives rather than layers because
+`MotionPlanner`'s segment array alone is about 10 kB: 4.2 links at 48% of RAM,
+4.3 at 33%.
+
+Earlier assessment tasks are no longer in the sketch. `firmware-sim`
+reproduces each by name (`run.py task31` …); for reference, they were:
 
 | block | fusion | planner | setup |
 | --- | --- | --- | --- |
@@ -118,22 +238,15 @@ exactly one — each defines its own `obs_v`/`obs_p`, planner and setup body.
 | TASK 3.2 | + `FrontLidarObserver` as an x source | `DistancePlanner(3, 0.06)` | `setTarget(200.0f)` — hold 200 mm off the wall |
 | TASK 3.3 | wheels + gyro | `HeadingPlanner(5)` | `setTarget(PI/2)` |
 | TASK 3.4 | wheels + gyro | `PSPlanner(10, 5)` | `addInstructions("ffrfllfrlf")` |
-| TASK 4.1 / 4.2 | + `LidarObserver` over `MAZE_MAP` | `MotionPlanner(10, 0.06, 200)` | `#include "maze_path.h"` |
-
-4.1/4.2 is what is uncommented today, with the lidar pose source itself
-commented out of `SensorFusion` (`SensorFusion sf(obs_v)` rather than
-`sf(obs_v, obs_p)`) — dead reckoning drives the generated path, and the
-localiser is built but not fed in. Re-enable both that and `setPrior()` together;
-the observer needs the prior to be worth anything.
-
-`firmware-sim` reproduces each of these blocks by name (`run.py task31` …).
 
 ## Generated headers
 
-`maze_map.h` and `maze_path.h` are written by `scripts/build_maze.sh`.
-**Do not edit them by hand.** Each carries a header comment recording the photo
-it came from, the lattice fit RMS, the obstacle counts and — critically — the
-start pose it was exported against:
+`maze_map.h` and `maze_path.h` are written by `scripts/build_maze.sh`, and are
+used by `task42.h` only — 4.3 discovers its maze instead.
+**Do not edit them by hand.** `maze_map.h` records the photo it was fitted from,
+the lattice fit RMS and the obstacle counts; `maze_path.h` records the start and
+goal cells and the turn radius. Both record — critically — the start pose they
+were exported against:
 
 ```
 // Robot frame: x forward, y left, mm. The origin is the start pose
@@ -150,6 +263,16 @@ the entire reason `build_maze.sh` exists rather than two separate invocations.
 `planner.appendSegment(...)` statements, `#include`d *inside* `setup()`.
 
 `.bak` beside each is the previous installed copy, kept by the wrapper.
+
+`splash_screen.h` is separate from those two and unrelated to the maze:
+`scripts/export_splash.py` writes it from `hardware/Splashscreen.png` as a
+`constexpr uint8_t[1024]` in `drawBitmap`'s own layout — row-major, 16 bytes per
+row, MSB leftmost, a set bit lit — so it is in flash and costs no RAM either.
+`scripts/build.sh --flash` re-exports it before every compile it is going to
+upload, because a stale logo is invisible until the panel lights up. Its
+`snake_case` name is the same signal the maze headers carry: **generated, do not
+edit by hand.** The hand-written half is `oledSplash.h`, which is what a change
+to how the splash is *drawn* should touch.
 
 ## Things that will bite
 
@@ -169,7 +292,13 @@ the entire reason `build_maze.sh` exists rather than two separate invocations.
 * **Turn radius comes in bands.** Up to 26 mm, or 73–182 mm, and nothing
   between — the geometry is worked through in `path-planning/README.md`, and the
   bands are narrower than the axle-centred arithmetic suggests because the body
-  rides 25 mm ahead of the axle and swings wider through every turn. The obvious
+  rides ahead of the axle and swings wider through every turn. The obvious
   "slightly tighter than a cell" 70 mm cannot clear a pivot post.
-* **`Serial` in the loop costs milliseconds.** The prints left in `loop()` are
-  commented out for that reason.
+* **The axle offset is not the same number here as in the planner.**
+  `AXLE_DIST_FROM_CENTRE` is `20` mm; `AXLE_OFFSET_MM` in
+  `path-planning/rrt_star.py` is `25.0`, and the bands above are derived from the
+  25. Conservative in the direction that matters, but the two are not mirroring
+  each other — see the root README's known divergences.
+* **`Serial` in the loop costs milliseconds.** `loop()` is kept free of it;
+  `setup()` prints freely because nothing is timing-critical yet. Add a print to
+  the loop only while you are actually debugging, and take it out again.

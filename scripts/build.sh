@@ -25,8 +25,14 @@ REPO_DIR=${0:A:h:h}
 # Build targets, as <name> -> <sketch directory relative to the repo root>.
 # Arduino requires a sketch's .ino to be named after its directory, so the
 # sketch file is always $SKETCH_DIR/${SKETCH_DIR:t}.ino, and the build dir is
-# always build/ beside the sketch — firmware/build and firmware-ds/build, which
-# is where firmware/.clangd and firmware-ds/.clangd each pin their database.
+# always build/ beside the sketch — firmware/build, which is where
+# firmware/.clangd pins its compilation database.
+#
+# NOTE: `lidar` is dead. firmware-ds/lidar was a bring-up sketch that printed
+# the three lidar ranges; it has been deleted from the repo, so this target
+# fails on the missing directory. Left here only so removing it is a deliberate
+# decision rather than a side effect of a docs pass — delete both entries when
+# you are sure nothing you have locally still wants it.
 typeset -A TARGETS=(
 	micromouse firmware/micromouse
 	lidar      firmware-ds/lidar
@@ -79,6 +85,37 @@ sys.exit(1)
 ' "$FQBN"
 }
 
+# Re-export firmware/micromouse/splash_screen.h from hardware/Splashscreen.png.
+#
+# The header is committed, but the PNG is the source of truth, and a binary
+# carrying a stale export of it is the one kind of wrong build that is invisible
+# until the panel lights up — so a run that is going to upload regenerates it
+# first. The exporter rewrites nothing when the bytes match, so an unchanged
+# PNG does not restamp the header's mtime.
+#
+# Missing uv or missing art is a warning, not a failure: the committed header is
+# still good, and refusing to flash over it would be worse than flashing it. An
+# exporter that runs and *fails* is a real error, and set -e takes it.
+regenerate_splash() {
+	local script=$REPO_DIR/scripts/export_splash.py
+	local art=$REPO_DIR/hardware/Splashscreen.png
+
+	if [[ ! -f $script ]]; then
+		print -u2 -- "$ME: $script missing; keeping the committed splash header"
+		return 0
+	fi
+	if [[ ! -f $art ]]; then
+		print -u2 -- "$ME: $art missing; keeping the committed splash header"
+		return 0
+	fi
+	if ! command -v uv >/dev/null; then
+		print -u2 -- "$ME: uv not found; keeping the committed splash header"
+		return 0
+	fi
+
+	uv run --script "$script" "$art"
+}
+
 usage() {
 	cat <<EOF
 Usage: ./scripts/build.sh [target] [--db] [--flash] [--port dev] [--help]
@@ -97,9 +134,12 @@ one of this script's own options is passed straight through to
 \`arduino-cli compile\`, so a bare word later on is a flag's value rather than a
 target:
   ./scripts/build.sh --warnings all      surface every compiler warning
-  ./scripts/build.sh lidar --verbose     show each compiler invocation
+  ./scripts/build.sh --verbose           show each compiler invocation
   ./scripts/build.sh --flash             build micromouse and upload it
-  ./scripts/build.sh lidar --flash       build the bring-up sketch and upload it
+  ./scripts/build.sh micromouse --db     name the target explicitly
+
+Only $DEFAULT_TARGET builds. The 'lidar' target listed above points at
+firmware-ds/lidar, which has been deleted from the repo, and fails.
 
 Passthrough reaches \`arduino-cli compile\` only, never the upload step.
 
@@ -115,6 +155,11 @@ Options:
               *before* the build, so an unplugged board fails immediately
               rather than after a full compile. Incompatible with --db, which
               produces no binary to upload.
+
+              Also re-exports firmware/micromouse/splash_screen.h from
+              hardware/Splashscreen.png first, so the logo on the panel is
+              always the current art. A plain build skips that and compiles the
+              committed header; run scripts/export_splash.py for the art alone.
   --port dev  Skip that detection and upload to this port, e.g.
               --port /dev/cu.usbmodem2101. Only meaningful with --flash.
   --help      Show this message.
@@ -204,6 +249,15 @@ if ((flash)); then
 		BOARD=${detected#*$'\t'}
 	fi
 	echo "will flash $BOARD on $PORT"
+fi
+
+# After the port check, so an unplugged board still fails first, and before the
+# compile, so the regenerated header is the one that gets built. Only for the
+# micromouse target, which is the only sketch with a panel to draw on. A plain
+# build is the fast inner loop and compiles the committed header as it stands —
+# run scripts/export_splash.py by hand to pick up an art change without a board.
+if ((flash)) && [[ $target == micromouse ]]; then
+	regenerate_splash
 fi
 
 # Empty the build dir but keep clangd's index cache.

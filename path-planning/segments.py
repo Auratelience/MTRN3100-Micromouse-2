@@ -189,14 +189,18 @@ def from_poses(poses, rho, max_sweep=np.pi / 2.0):
 
 
 # ------------------------------------------------------------------ transform
-def _map(segs, f, mirror):
+def _map(segs, f, mirror, radius_scale=1.0):
+    """Apply a point map to every segment.  ``radius_scale`` is for the one
+    transform that is not an isometry: curvature is 1/mm, so a resize divides
+    it by the same factor the points were multiplied by."""
     out = []
     for s in segs:
         d = s.direction
         if mirror and s.is_arc:
             d = RIGHT if s.direction == LEFT else LEFT
         c = None if s.centre is None else f(s.centre[None])[0]
-        out.append(Segment(f(s.start[None])[0], f(s.end[None])[0], s.curvature, d, c))
+        k = s.curvature / radius_scale
+        out.append(Segment(f(s.start[None])[0], f(s.end[None])[0], k, d, c))
     return out
 
 
@@ -211,6 +215,24 @@ def rigid(segs, theta=0.0, translate=(0.0, 0.0)):
     R = np.array([[c, -s], [s, c]])
     t = np.asarray(translate, float)
     return _map(segs, lambda P: P @ R.T + t, False)
+
+
+def scale(segs, k):
+    """Uniform resize about the origin by a positive factor.
+
+    Radii grow with the geometry, so curvature goes the other way -- leave it
+    alone and every arc's chord stops matching its stated radius, which is
+    exactly the "firmware rebuilds the centre N mm off" that ``check`` reports.
+    A positive factor preserves orientation, so turn directions stand.
+
+    Nothing else in the pipeline scales with this: the map, the clearance check
+    and the overlay all describe the maze as photographed.  Scale the path and
+    it is no longer the path that was checked against them.
+    """
+    k = float(k)
+    if not k > 0.0:
+        raise ValueError(f"scale factor must be positive, got {k}")
+    return _map(segs, lambda P: P * k, False, radius_scale=k)
 
 
 def to_firmware(segs, start_pose=None, local=True):
@@ -365,12 +387,16 @@ def check(segs, gap_tol=1e-3, heading_tol=0.05, centre_tol=0.5):
     for k, s in enumerate(segs):
         if s.length <= 1e-9:
             bad.append(f"[{k}] zero length")
+        # A curvature under the tolerance is not a gentle arc on the robot, it
+        # is a straight: the firmware drives the chord and loses the bulge.
+        # Tested outside ``is_arc`` because that property is this same
+        # threshold -- inside it, radius > MAX_ARC_RADIUS_MM cannot ever hold.
+        if 0.0 < s.curvature <= STRAIGHT_TOLERANCE:
+            bad.append(
+                f"[{k}] radius {s.radius:.0f} mm -> curvature {s.curvature:.2e} "
+                f"reads as a straight line on the robot"
+            )
         if s.is_arc:
-            if s.radius > MAX_ARC_RADIUS_MM:
-                bad.append(
-                    f"[{k}] radius {s.radius:.0f} mm -> curvature {s.curvature:.2e} "
-                    f"reads as a straight line on the robot"
-                )
             if s.sweep > np.pi + 1e-6:
                 bad.append(f"[{k}] sweep {np.degrees(s.sweep):.0f} deg exceeds 180")
             if s.centre is not None:

@@ -4,14 +4,21 @@
 # map header installed.
 #
 #     ./scripts/build_maze.sh 4                  # mazes/4.png, cell 1,1 -> 7,7
-#     ./scripts/build_maze.sh 2.jpg --from 1,1 --to 5,3
+#     ./scripts/build_maze.sh 5.png --from 1,1 --to 3,3
 #     ./scripts/build_maze.sh 1 --no-install     # overlay and headers there, firmware untouched
+#
+# No maze photo is tracked (.gitignore excludes *.png and *.jpg), so supply
+# your own in path-planning/mazes/ before any of the above will run.
 #
 # Runs maze_demo.py for the plan and the overlay, then export_map.py for
 # maze_map.h.  Both get the *same* --from/--theta0/--r, because the exported
 # map and the exported path are both re-origined onto that start pose: give
 # them different ones and the robot localises against a map offset from the
 # path it is driving.  That coupling is the whole reason this wrapper exists.
+#
+# --scale is the deliberate exception: it resizes the emitted path and nothing
+# else, so at anything but 1 the path and the map are no longer the same size.
+# That is a localisation fight, and the run says so before it exits.
 #
 # Every run leaves its own two headers in path-planning/ -- map_<stem>.h and
 # path_<stem>.h -- and those are what get installed as maze_map.h /
@@ -42,10 +49,11 @@ FROM=1,1
 TO=7,7
 THETA0=auto
 RADIUS=40
-TURN=25
-ITERS=4000
-SEED=1
+TURN=10
+ITERS=15000
+SEED=2
 MODE=dubins
+SCALE=1
 OUT=
 INSTALL=1
 OPEN=1
@@ -66,6 +74,7 @@ usage() {
   --iters n          RRT* iterations (default $ITERS)
   --seed n           RRT* seed (default $SEED)
   --mode m           dubins | polyline (default $MODE)
+  --scale k          resize the emitted path only, not the map (default $SCALE)
   --out file         overlay path (default map_<name>_overlay.png)
   --firmware dir     where maze_map.h and maze_path.h go (default $FIRMWARE)
   --no-install       plan, draw and export only, leave the firmware alone
@@ -87,6 +96,7 @@ while (( $# )); do
         --iters)       ITERS=${2:?--iters needs n}; shift 2 ;;
         --seed)        SEED=${2:?--seed needs n}; shift 2 ;;
         --mode)        MODE=${2:?--mode needs dubins|polyline}; shift 2 ;;
+        --scale)       SCALE=${2:?--scale needs a factor}; shift 2 ;;
         --out)         OUT=${2:?--out needs a file}; shift 2 ;;
         --firmware)    FIRMWARE=${2:?--firmware needs a directory}; shift 2 ;;
         --no-install)  INSTALL=0; shift ;;
@@ -105,6 +115,10 @@ PATH_HEADER=$FIRMWARE/maze_path.h
 [[ $FROM == <->,<-> ]] || die "--from wants i,j cell indices, got '$FROM'"
 [[ $TO   == <->,<-> ]] || die "--to wants i,j cell indices, got '$TO'"
 [[ $MODE == (dubins|polyline) ]] || die "--mode wants dubins or polyline, got '$MODE'"
+# a plain decimal, then a value test -- maze_demo.py rejects <= 0 as well, but
+# dying here keeps the complaint next to the flag that caused it
+[[ $SCALE == (<->|<->.<->|.<->) ]] || die "--scale wants a number, got '$SCALE'"
+(( SCALE > 0 )) || die "--scale must be greater than zero, got '$SCALE'"
 
 # ---------------------------------------------------------------- the image
 # accept a path, a name in mazes/, or a bare stem to extension-match
@@ -141,6 +155,7 @@ PY=(uv run --directory $PLANNING python)
 
 # ------------------------------------------------------------------- plan
 note "planning $IMAGE_ARG -> ${IMAGE:t}, cell $FROM -> $TO, r=${RADIUS}mm turn=${TURN}mm"
+(( SCALE == 1 )) || note "path scaled x$SCALE on the way out; the map is not"
 LOG=$(mktemp -t build_maze) || die "mktemp failed"
 trap 'rm -f $LOG' EXIT
 
@@ -149,7 +164,7 @@ trap 'rm -f $LOG' EXIT
 if ! $PY maze_demo.py "$IMAGE" \
         --from "$FROM" --to "$TO" --theta0 "$THETA0" \
         --r "$RADIUS" --turn-radius "$TURN" --mode "$MODE" \
-        --iters "$ITERS" --seed "$SEED" \
+        --iters "$ITERS" --seed "$SEED" --scale "$SCALE" \
         --out "$OUT" --emit "$EMIT" 2>&1 | tee $LOG; then
     die "maze_demo.py failed, nothing installed"
 fi
@@ -237,13 +252,21 @@ install_header $MAP $HEADER "$COUNT obstacles"
 # path_<stem>.h from an earlier one would drive the robot somewhere else.
 if (( PLANNED )) && [[ -f $EMIT ]]; then
     NSEG=$(grep -c 'appendSegment' $EMIT)
-    install_header $EMIT $PATH_HEADER "$NSEG segments, $FROM -> $TO"
+    WHAT="$NSEG segments, $FROM -> $TO"
+    (( SCALE == 1 )) || WHAT="$WHAT, scaled x$SCALE"
+    install_header $EMIT $PATH_HEADER "$WHAT"
 else
     print -u2 -- "\e[33m!!\e[0m no path this run, so ${PATH_HEADER:t} was left as it was."
 fi
 
 # both headers are only meaningful from the pose they were exported against
 print -- "   start the robot on cell $FROM at the heading above, odometry reset to (0, 0, 0)"
+# the one thing this wrapper otherwise exists to prevent, done on purpose
+if (( SCALE != 1 )); then
+    print -u2 -- "\e[33m!!\e[0m the path is scaled x$SCALE and ${HEADER:t} is not."
+    print -u2 -- "   every lidar fix pulls the robot back onto the unscaled map, so"
+    print -u2 -- "   comment out the LIDAR LOCALISATION block or expect them to fight."
+fi
 if grep -qE '^\s*//\s*#include "maze_map.h"' $FIRMWARE/micromouse.ino 2>/dev/null; then
     print -- "   maze_map.h is installed but still commented out in micromouse.ino"
     print -- "   (LIDAR LOCALISATION block) -- the path runs on dead reckoning until you enable it"

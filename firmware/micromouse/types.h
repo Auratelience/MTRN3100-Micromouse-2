@@ -612,14 +612,30 @@ class Segment {
     // mm early) then read as ">1" ("past the end"), so the planner's advance
     // loop skipped the whole arc. Here a behind-start point reads slightly
     // negative instead, and sweeps up to a full turn are handled correctly.
+    //
+    // How much of the circle is given to "behind the start" is the whole
+    // question, because everything else on it reads as past the end and so
+    // finishes the segment. Splitting the unused part in half -- the obvious
+    // reading of "which end is it nearer" -- is what stranded the robot on the
+    // r = 10 mm arcs of a CV-fitted route: those are driven as near-pivots, the
+    // arc centre sits 10 mm away, and a robot that has rotated round the back of
+    // that circle without translating lands in the half that reads negative. It
+    // then cannot satisfy SEGMENT_ADVANCE_THRESHOLD from any position it can
+    // still reach, and spins there for good. Reserving only the handover slop
+    // lets it finish on overshoot instead.
     inline float arcProgress(const Vec2D& pos) const {
         float startAngle = arg(start - c);
         float sweep      = arcTravel(startAngle, arg(end - c));
         if (sweep <= 0.0f) return 1.0f;
         float travelled = arcTravel(startAngle, arg(pos - c));
-        // Points on the unused side of the circle wrap toward TWO_PI; treat
-        // those as "not started" (negative) rather than "past the end".
-        if (travelled > 0.5f * (sweep + TWO_PI)) travelled -= TWO_PI;
+
+        // Slop as an angle, and never more than half the unused circle -- that
+        // bound is the old rule exactly, so this can only ever be tighter.
+        float band = curvature * ARC_BEHIND_START_TOL_MM;
+        float half = 0.5f * (TWO_PI - sweep);
+        if (band > half) band = half;
+
+        if (travelled > TWO_PI - band) travelled -= TWO_PI;
         return travelled / sweep;
     }
 
@@ -961,8 +977,9 @@ class WallObstacle {
 
     // The panel as a drawable segment: its two ends are
     // centre +/- 0.5 * panelLength() * (cos panelAlpha(), sin panelAlpha()).
-    // OLEDPath needs both to place a panel on screen, and boundingRadius()
-    // alone cannot -- it is a circle, and a wall is a line.
+    // Obstacle::panelEnds() is what assembles them, and it needs both --
+    // boundingRadius() alone cannot place a panel, being a circle where a wall
+    // is a line.
     //
     // Named apart from the members rather than shadowing them: a class cannot
     // hold a member and a member function of the same name, and renaming the
@@ -1026,6 +1043,38 @@ struct Obstacle {
     float boundingRadius() const {
         const CircularObstacle* c = std::get_if<CircularObstacle>(&form);
         return c ? c->boundingRadius() : std::get_if<WallObstacle>(&form)->boundingRadius();
+    }
+
+    // Which of the two forms this is, so a consumer can pick a circle or a
+    // line without opening the variant itself. A renderer wants exactly this
+    // and nothing else about the alternative.
+    bool circular() const {
+        return std::get_if<CircularObstacle>(&form) != nullptr;
+    }
+
+    // Its radius, for a circular obstacle. boundingRadius() already answers
+    // this for a circle, and is named for the other case; this one says what
+    // is meant at a call site drawing the obstacle rather than bounding it.
+    float radius() const {
+        return boundingRadius();
+    }
+
+    // The two ends a panel runs between, in map coordinates: centre +/- half
+    // its length along its own heading. False -- and both untouched -- for a
+    // circular obstacle, which has no ends.
+    //
+    // Here rather than in the renderer that draws it, because it is a fact
+    // about the geometry: WallObstacle::panelLength() and panelAlpha() exist
+    // to make it expressible and this is the only thing either is for.
+    bool panelEnds(Vec2D& a, Vec2D& b) const {
+        const WallObstacle* w = std::get_if<WallObstacle>(&form);
+        if (w == nullptr) return false;
+
+        const float half  = 0.5f * w->panelLength();
+        const Vec2D along = {trig::xcos(w->panelAlpha()), trig::xsin(w->panelAlpha())};
+        a                 = centre - (half * along);
+        b                 = centre + (half * along);
+        return true;
     }
 
     RayHit cast(const Vec2D& origin, const Vec2D& beam) const {
@@ -1134,6 +1183,70 @@ struct Map {
         return n;
     }
 };
+
+// The world box a map occupies, in millimetres.
+//
+// Wanted by anything that has to place a whole map inside a fixed frame -- the
+// OLED's map pane is the only caller today -- and it is a property of the map
+// rather than of the frame, which is why it lives here and the pixel
+// projection that consumes it (OLEDView) does not.
+struct MapBounds {
+    float minX = 0.0f;
+    float maxX = 0.0f;
+    float minY = 0.0f;
+    float maxY = 0.0f;
+
+    // False until the first obstacle lands, so an empty map is distinguishable
+    // from one sitting at the origin.
+    bool any = false;
+
+    // Grows the box to hold a circle of `r` about `centre`. A panel goes in as
+    // its bounding circle, which is looser than its two ends but never clips
+    // it, and costs no trigonometry.
+    void add(const Vec2D& centre, float r) {
+        const float lowX  = centre.x - r;
+        const float highX = centre.x + r;
+        const float lowY  = centre.y - r;
+        const float highY = centre.y + r;
+
+        if (!any) {
+            minX = lowX;
+            maxX = highX;
+            minY = lowY;
+            maxY = highY;
+            any  = true;
+            return;
+        }
+
+        if (lowX < minX) minX = lowX;
+        if (highX > maxX) maxX = highX;
+        if (lowY < minY) minY = lowY;
+        if (highY > maxY) maxY = highY;
+    }
+
+    // Both spans strictly positive, which is what a consumer scaling a map
+    // into a frame needs: an empty map, a single obstacle, or a row of them all
+    // give a flat box, and dividing a frame by a zero span is the failure this
+    // exists to let a caller refuse up front.
+    bool valid() const {
+        return any && maxX > minX && maxY > minY;
+    }
+};
+
+// The box `map` occupies. Templated on the map type rather than taking a
+// Map<S>, so it walks either the exported map or MazeWallMap -- it needs only
+// size(), present() and operator[], and for a map whose slots are derived
+// rather than stored the absent ones must not widen the box.
+template <typename MapT>
+MapBounds mapBounds(const MapT& map) {
+    MapBounds bounds;
+    for (size_t i = 0; i < map.size(); ++i) {
+        if (!map.present(i)) continue;
+        const Obstacle o = map[i];
+        bounds.add(o.centre, o.boundingRadius());
+    }
+    return bounds;
+}
 
 // MazeMapper counts cells from the low corner of the maze and never mentions
 // millimetres -- deliberately, so its search stays unit-free. The pose

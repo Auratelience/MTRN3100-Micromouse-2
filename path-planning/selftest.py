@@ -199,6 +199,64 @@ def test_segments():
     check("to_firmware swaps every turn direction", flipped)
     check("to_firmware keeps the segment list continuous", not sg.check(fw))
 
+    # scale: the uniform resize maze_demo applies to the firmware-frame path.
+    # Size is linear in k, shape is not: sweeps, turn directions and the
+    # firmware's own centre reconstruction all have to survive it.
+    for k in (0.5, 2.5):
+        sc = sg.scale(fw, k)
+        worst_centre = max(
+            (float(np.linalg.norm(s.firmware_centre() - s.centre))
+             for s in sc if s.is_arc),
+            default=0.0,
+        )
+        worst_sweep = max(
+            (abs(a.sweep - b.sweep) for a, b in zip(fw, sc) if a.is_arc), default=0.0
+        )
+        check(
+            f"scale({k}) multiplies the length by {k}",
+            len(sc) == len(fw)
+            and abs(sg.length(sc) - k * sg.length(fw)) <= 1e-9 * k * sg.length(fw),
+            f"{sg.length(sc):.3f} vs {k * sg.length(fw):.3f} mm",
+        )
+        check(
+            f"scale({k}) keeps every turn direction",
+            all(a.direction == b.direction for a, b in zip(fw, sc)),
+        )
+        check(
+            f"scale({k}) leaves every sweep alone",
+            worst_sweep < 1e-9,
+            f"{np.degrees(worst_sweep):.1e} deg",
+        )
+        check(
+            f"scale({k}) keeps the arcs firmware-representable",
+            worst_centre < 1e-6 and not sg.check(sc),
+            f"centre {worst_centre:.1e} mm",
+        )
+
+    back = sg.scale(sg.scale(fw, 4.0), 0.25)
+    worst_rt = max(
+        max(float(np.linalg.norm(a.start - b.start)),
+            float(np.linalg.norm(a.end - b.end)))
+        for a, b in zip(fw, back)
+    )
+    check("scale() round-trips", worst_rt < 1e-9, f"{worst_rt:.1e} mm")
+
+    # a scale big enough to push an arc past MAX_ARC_RADIUS_MM stops being
+    # representable, and that is exactly what maze_demo re-checks for
+    check(
+        "check() catches an arc scaled up into a straight",
+        any("straight line" in c for c in sg.check(sg.scale(fw, 100.0)))
+        if any(s.is_arc for s in fw) else True,
+    )
+
+    rejected = 0
+    for bad_k in (0.0, -1.0):
+        try:
+            sg.scale(fw, bad_k)
+        except ValueError:
+            rejected += 1
+    check("scale() rejects a non-positive factor", rejected == 2)
+
     # merging is exact, and cleaning cannot move the path far
     q0 = np.array([0.0, 0.0, 0.0])
     straights = [
