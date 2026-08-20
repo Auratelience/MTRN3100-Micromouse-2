@@ -88,14 +88,31 @@ MotionController mc(leftMotor, rightMotor, kinematics, 10.0f, 3.0f, 0.0f);
 unsigned long previous_time = 0;
 unsigned long current_time = 0;
 
+// Bring-up progress, as one line per step.
+//
+// beginStep writes "Doing the thing..." and endStep backs over the ellipsis
+// with a verdict, so a step that hangs leaves its own name on the wire as the
+// last thing printed. Six steps used to spell this out individually and had
+// drifted apart in their failure text.
+void beginStep(const char* what) {
+    Serial.print(what);
+    Serial.print("...");
+}
+
+void endStep(bool ok, const char* failure) {
+    Serial.print("\b\b\b [");
+    Serial.print(ok ? "OKAY" : failure);
+    Serial.println("]");
+}
+
 void setup() {
     Serial.begin(115200); // DIAGNOSTIC: was 9600
     delay(1000);
     Serial.println("Beginning setup:");
 
-    Serial.print("Initialising I2C...");
+    beginStep("Initialising I2C");
     i2cRepairer.begin();
-    Serial.println("\b\b\b [OKAY]");
+    endStep(true, "");
 
     // Straight after the bus and before everything slow, which is the whole
     // point: display.init() needs nothing but Wire, and the splash is only
@@ -110,37 +127,37 @@ void setup() {
     // lidar's ~90 ms on top, the logo holds for about 3.2 s, so it needs no
     // delay() of its own -- it is showing during time the robot was already
     // going to spend standing still.
-    Serial.print("Initialising OLED...");
+    beginStep("Initialising OLED");
     if (!display.init()) {
-        Serial.println("\b\b\b [OLED INIT FAILED]");
+        endStep(false, "OLED INIT FAILED");
     } else {
         drawSplash(display);
-        Serial.println("\b\b\b [OKAY]");
+        endStep(true, "");
     }
 
-    Serial.print("Initialising Motors...");
+    beginStep("Initialising Motors");
     leftMotor.init();
     rightMotor.init();
-    Serial.println("\b\b\b [OKAY]");
+    endStep(true, "");
 
-    Serial.print("Initialising IMU Observer (P)...");
+    beginStep("Initialising IMU Observer (P)");
     if (!imu.init(IMU::GyroScale::DPS_1000, IMU::AccelScale::G_4, IMU::LowPassFrequency::HZ_44)) {
-        Serial.println("\b\b\b [MPU6050 INIT FAILED]");
+        endStep(false, "MPU6050 INIT FAILED");
     } else {
         imu_obsv.init();
         if (!imu_obsv.ready()) {
-            Serial.println("\b\b\b [IMU OBSERVER INIT FAILED]");
+            endStep(false, "IMU OBSERVER INIT FAILED");
         } else {
-            Serial.println("\b\b\b [OKAY]");
+            endStep(true, "");
         }
     }
 
-    Serial.print("Initialising Lidar Observer (P)...");
+    beginStep("Initialising Lidar Observer (P)");
     if (!lidar.init()) {
-        Serial.println("\b\b\b [VL6180X INIT FAILED]");
+        endStep(false, "VL6180X INIT FAILED");
     } else {
         lidar_obsv.setPrior(decltype(lidar_obsv)::PoseFunc::create<fusedPose>());
-        Serial.println("\b\b\b [OKAY]");
+        endStep(true, "");
     }
 
     // Seeds every observer that holds an absolute pose, ImuObserver's heading
@@ -149,7 +166,7 @@ void setup() {
     // integrated anything.
     sf.set(Pose{0, 0, 0});
 
-    Serial.print("Loading goal...");
+    beginStep("Loading goal");
 
     // NOTE THAT X-AXIS IS FORWARDS: Y-AXIS IS LEFT!!!
 
