@@ -29,43 +29,25 @@
 #include "observers.h"
 #include "oledScreen.h"
 #include "planners.h"
+#include "selfCheck.h"
 #include "sensorFusion.h"
 #include "types.h"
 
-// Cells per side, and so the size everything below instantiates MazeMapper<>
-// at, the same way TRIG_LUT_SIZE sizes trig. The classes are templated on it,
-// so a test or a second instance can pick another size without touching a
-// header.
-//
-// Cost grows as N^2: at 9 the mapper holds ~500 bytes, and the deepest of its
-// breadth-first searches -- the frontier pruning, which wants two distance
-// fields and a queue at once -- borrows ~490 bytes of stack. At 16 that is
-// ~1.5 kB held and ~1.5 kB borrowed. The searches run one at a time, so the
-// borrow does not stack.
-//
-// Five is a smaller maze than the competition deck, which is 9 cells a side --
-// maze_map.h describes its 10x10 post lattice, and ten post lines bound nine
-// cells, with cell centres from -180 mm to 1260 mm on both axes. Set this to 9
-// to explore the full deck; nothing else has to change.
-constexpr uint8_t MAZE_SIZE = 9;
+// Everything below is instantiated at the capacity rather than at the maze
+// being run. MAZE_SIZE_MAX is how much room the buffers have; the grid actually
+// in use is a runtime value the mapper carries, set by runner.configure(), so
+// this binary handles any deck from MAZE_SIZE_MIN up without a recompile.
+using mazeMapper = MazeMapper<MAZE_SIZE_MAX>;
 
-using mazeMapper = MazeMapper<MAZE_SIZE>;
-// The complete maze configuration: the runner is handed it at construction and
-// runBegin() only has to start it.
-//
-// Cells are the grid convention from types.h -- (x, y) with x forward and y
-// left, so North steps +x and West steps +y. Start in a corner facing North,
-// goal at (2, 4).
 PSPlanner psp(8.0f, 10.0f);
-Cell startCell = {1, 1};
-Direction startHeading = North;
-Cell goalCell  = {5, 5};
 
-MazeRunner<MAZE_SIZE> runner(lidar, psp, startCell, startHeading, goalCell);
+// Unconfigured until runBegin() says otherwise: a mapper with no grid refuses
+// begin(), so there is no half-set-up run to trip over in between.
+MazeRunner<MAZE_SIZE_MAX> runner(lidar, psp);
 
-MazeWallMap<MAZE_SIZE> wallMap(runner.mapper);
+MazeWallMap<MAZE_SIZE_MAX> wallMap(runner.mapper);
 
-LidarObserver<MazeWallMap<MAZE_SIZE>> lidar_obsv(lidar, wallMap);
+LidarObserver<MazeWallMap<MAZE_SIZE_MAX>> lidar_obsv(lidar, wallMap);
 
 // The lidar for position, the gyro for heading, and neither for the other.
 //
@@ -87,7 +69,7 @@ SensorFusion sf(obs_v, obs_p, 0.1f, FusionWeights::ThetaCorrectionGain);
 
 Pose fusedPose() { return sf.estimate.pose(); }
 
-using runnerState = MazeRunner<MAZE_SIZE>::State;
+using runnerState = MazeRunner<MAZE_SIZE_MAX>::State;
 
 // The phase of the run, in four letters.
 //
@@ -134,7 +116,7 @@ OLEDMetric screenMetric() {
 // wallMap and not runner.map() -- the same walls, but as the panels and posts
 // the lidar localises against, so what is drawn is the geometry the fix was
 // taken from.
-OLEDScreen<MazeWallMap<MAZE_SIZE>> screen(
+OLEDScreen<MazeWallMap<MAZE_SIZE_MAX>> screen(
     display,
     wallMap,
     etl::delegate<Pose()>::create<fusedPose>(),
@@ -144,6 +126,17 @@ OLEDScreen<MazeWallMap<MAZE_SIZE>> screen(
 
 // Called from setup(), after the shared bring-up.
 void runBegin() {
+#ifdef MICROMOUSE_DEBUG
+    runSelfChecks(runner.mapper);
+#endif
+
+    // TEMPORARY -- replaced by runStartupUI() in the bring-up reorder, Task 10.
+    //
+    // 9 is the competition deck: maze_map.h describes its 10x10 post lattice,
+    // and ten post lines bound nine cells, with cell centres from -180 mm to
+    // 1260 mm on both axes.
+    runner.configure(RunConfig{9, Cell{1, 1}, North, Cell{5, 5}});
+
     if (!runner.begin()) {
         Serial.println("\b\b\b [MAZE RUNNER REJECTED START OR GOAL]");
     } else {

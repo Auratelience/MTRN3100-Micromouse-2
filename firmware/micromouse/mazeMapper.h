@@ -16,8 +16,15 @@
 #pragma GCC push_options
 #pragma GCC optimize("O2")
 
-// Frontier exploration of an unknown N x N maze, then a shortest route through
-// what the exploration actually saw.
+// Frontier exploration of an unknown maze, then a shortest route through what
+// the exploration actually saw.
+//
+// N is the capacity every buffer here is sized to, fixed at compile time. The
+// grid actually being run is configure()'s n, which may be anything from
+// MAZE_SIZE_MIN up to N, so one binary serves every maze size. inside() is the
+// only place that knows the difference, and everything that touches a cell asks
+// it: the loops below sweep the full capacity precisely so a cell outside n
+// cannot keep a previous run's data.
 //
 // The sweep always drives towards the nearest cell that still has somewhere
 // worth exploring to go, and once none is left, home to the start cell. Both
@@ -40,7 +47,8 @@
 //
 // The caller drives the loop:
 //
-//     MazeMapper<9> mapper(Cell{0, 0}, North, Cell{4, 4});
+//     MazeMapper<16> mapper;
+//     mapper.configure(9, Cell{0, 0}, North, Cell{4, 4});
 //     mapper.begin();
 //     mapper.markWall(Cell{4, 4}, North);                  // priors, if any
 //     while (!mapper.doneExploring()) {
@@ -70,6 +78,16 @@ struct Cell {
     int8_t y;
 };
 
+// Everything about a run that is chosen rather than measured: the maze the
+// robot has been put in, and where in it the job starts and ends. Filled by
+// startupUI.h at boot and handed to MazeRunner::configure().
+struct RunConfig {
+    uint8_t   size;
+    Cell      start;
+    Direction heading;
+    Cell      goal;
+};
+
 template <size_t N>
 class MazeMapper {
     static_assert(N >= 2, "N >= 2 required.");
@@ -83,12 +101,36 @@ class MazeMapper {
     // directionIndex(), so wallMask() is a shift rather than another switch.
     enum WallBit : uint8_t { WallNorth = 1, WallWest = 2, WallSouth = 4, WallEast = 8 };
 
-    MazeMapper(Cell startCell, Direction startHeading, Cell goalCell) :
-        start(startCell), goal(goalCell), current(startCell),
-        facing(startHeading), startFacing(startHeading) {}
+    // Unconfigured. n = 0 makes inside() false everywhere, so begin() refuses
+    // and observe() cannot write, which is the right state for a mapper whose
+    // maze has not been chosen yet.
+    MazeMapper() = default;
 
     // Longest route the maze can hold, and so the size of every path buffer.
     static constexpr uint16_t MAX_CELLS = static_cast<uint16_t>(N) * static_cast<uint16_t>(N);
+
+    // The grid actually in use, as opposed to MAX_CELLS, which is the capacity
+    // every buffer above is sized to. Everything that asks "is this cell in the
+    // maze" goes through inside(), and inside() reads this.
+    uint8_t gridSize() const { return n; }
+
+    uint16_t cellCount() const { return static_cast<uint16_t>(n) * static_cast<uint16_t>(n); }
+
+    // The whole runtime configuration, in one call. False -- and the mapper
+    // left as it was -- if the size is out of range. Start and goal are not
+    // checked here: begin() already validates them against the grid, and doing
+    // it in one place keeps the two from disagreeing.
+    bool configure(uint8_t gridSize, Cell startCell, Direction startHeading, Cell goalCell) {
+        if (gridSize < MAZE_SIZE_MIN || gridSize > N) return false;
+        started     = false;
+        n           = gridSize;
+        start       = startCell;
+        goal        = goalCell;
+        current     = startCell;
+        facing      = startHeading;
+        startFacing = startHeading;
+        return true;
+    }
 
     // Seeds the map: everything unexplored, walls only around the perimeter.
     // Returns false if either cell is outside the maze, leaving the mapper
@@ -107,6 +149,10 @@ class MazeMapper {
         homeHops     = 0;
         homeHops0    = 0;
 
+        // The whole capacity, not just the selected grid: these arrays outlive
+        // any one configure(), and a cell outside n that still holds a previous
+        // run's walls is the failure mode this loop exists to prevent. inside()
+        // keeps the search out of that region regardless; this keeps it clean.
         for (uint8_t x = 0; x < N; ++x) {
             for (uint8_t y = 0; y < N; ++y) {
                 walls[x][y]          = 0;
@@ -119,10 +165,11 @@ class MazeMapper {
             }
         }
 
-        // Perimeter. Each of these mirrors onto a cell outside the maze, which
-        // addWall drops, so no already-initialised neighbour is touched.
-        for (uint8_t i = 0; i < N; ++i) {
-            const int8_t last = static_cast<int8_t>(N - 1);
+        // Perimeter, at the selected grid's boundary rather than the capacity's.
+        // Each of these mirrors onto a cell outside the maze, which addWall
+        // drops, so no already-initialised neighbour is touched.
+        for (uint8_t i = 0; i < n; ++i) {
+            const int8_t last = static_cast<int8_t>(n - 1);
             addWall(Cell{0, static_cast<int8_t>(i)}, South);
             addWall(Cell{last, static_cast<int8_t>(i)}, North);
             addWall(Cell{static_cast<int8_t>(i), 0}, East);
@@ -412,8 +459,10 @@ class MazeMapper {
         return true;
     }
 
-    static bool inside(const Cell& c) {
-        return c.x >= 0 && c.x < static_cast<int>(N) && c.y >= 0 && c.y < static_cast<int>(N);
+    // Not static any more: the bound is the selected grid, which is per-mapper
+    // state rather than the template's capacity.
+    bool inside(const Cell& c) const {
+        return c.x >= 0 && c.x < static_cast<int>(n) && c.y >= 0 && c.y < static_cast<int>(n);
     }
 
     static bool sameCell(const Cell& a, const Cell& b) { return a.x == b.x && a.y == b.y; }
@@ -758,7 +807,10 @@ class MazeMapper {
     // distilled from.
     bool improving[N][N];
 
-    Cell start;
+    // Zero until configure() runs. See the constructor.
+    uint8_t n = 0;
+
+    Cell start{0, 0};
     Cell goal{0, 0};
     Cell current{0, 0};
     Direction facing      = North;

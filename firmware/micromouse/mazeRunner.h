@@ -44,14 +44,14 @@ class MazeRunner {
 
     enum class State : uint8_t { Init, Explore, Plan, Race, Done };
 
-    MazeRunner(
-        LIDAR& lidar,
-        PSPlanner& planner,
-        const Cell& startCell,
-        Direction startHeading,
-        const Cell& goalCell
-    ) :
-        lidar(lidar), planner(planner), mapper(startCell, startHeading, goalCell) {}
+    MazeRunner(LIDAR& lidar, PSPlanner& planner) : lidar(lidar), planner(planner) {}
+
+    // The run's configuration, which is chosen at boot rather than compiled in.
+    // False if the mapper rejects the size; the start and goal are validated by
+    // begin(), which is where they have always been validated.
+    bool configure(const RunConfig& cfg) {
+        return mapper.configure(cfg.size, cfg.start, cfg.heading, cfg.goal);
+    }
 
     // Seeds the mapper and every prior it needs, then opens exploration.
     // False -- and the run parked in Done -- if the mapper rejects the start

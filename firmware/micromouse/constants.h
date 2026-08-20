@@ -92,9 +92,18 @@ constexpr float TURN_ENVELOPE_MARGIN         = 0.8f;
 constexpr float ARC_BEHIND_START_TOL_MM      = 5.0f;
 
 // MAZE
-// Cells per side lives in unseenMaze.h, next to the MazeRunner and MazeWallMap
-// instances it sizes: that is the only build that constructs a MazeMapper.
+// Cells per side. MAZE_SIZE_MAX is the template capacity every maze buffer is
+// sized to, not the maze being run: the grid actually in use is chosen at boot
+// and carried as a runtime value, so one binary handles every size in range.
 //
+// Cost grows as N^2. At the capacity, MazeMapper holds ~1.5 kB and its deepest
+// breadth-first search -- the frontier pruning, which wants two distance fields
+// and a queue at once -- borrows ~1.5 kB of stack. The searches run one at a
+// time, so the borrow does not stack. That is affordable on the Nano R4's
+// 32 kB, especially with task42.h's MotionPlanner instance gone.
+constexpr uint8_t MAZE_SIZE_MIN = 2;
+constexpr uint8_t MAZE_SIZE_MAX = 16;
+
 // Physical size of one grid cell, mm. Full-size Micromouse uses 180mm,
 // half-size 168mm. Shared by the path factory and the instruction runner.
 constexpr float MAZE_CELL_SIZE = 180.0f;

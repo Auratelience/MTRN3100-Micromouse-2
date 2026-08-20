@@ -321,8 +321,8 @@ class FrontLidarObserver : public ObserverP {
 // uses, because SensorFusion never hands its pose sources the estimate they
 // are correcting. In the sketch:
 //
-//     MazeWallMap<MAZE_SIZE> wallMap(runner.map());        // discovered
-//     LidarObserver<MazeWallMap<MAZE_SIZE>> lidar_obsv(lidar, wallMap);
+//     MazeWallMap<MAZE_SIZE_MAX> wallMap(runner.mapper);    // discovered
+//     LidarObserver<MazeWallMap<MAZE_SIZE_MAX>> lidar_obsv(lidar, wallMap);
 //     // or, against the exported map:
 //     // LidarObserver<Map<MAZE_OBSTACLE_COUNT>> lidar_obsv(lidar, MAZE_MAP);
 //     const std::array<PoseSource, 1> obs_p = {{{&lidar_obsv, FusionWeights::XYPTrust}}};
