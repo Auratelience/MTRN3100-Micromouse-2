@@ -291,25 +291,29 @@ git commit -m "Collapse repeated bring-up print in setup()"
 
 ---
 
-### Task 4: Runtime grid size in `MazeMapper`, with the boot self-check as its test
+### Task 4: Runtime grid size, end to end, with the boot self-check as its test
 
-This is the highest-risk task in the plan. The self-check is written first and must fail before the implementation exists — that is this codebase's only available red-green cycle.
+The highest-risk task in the plan. The self-check is written first and must fail before the implementation exists — this codebase's only available red-green cycle.
+
+**Scope note (controller ruling, pre-flight):** this task carries `MazeRunner`'s constructor change and the `unseenMaze.h` switch to `MAZE_SIZE_MAX` as well, because they cannot be separated. Removing `MazeMapper`'s three-argument constructor while `MazeRunner`'s member-init list still calls it does not compile. Everything that is genuinely independent — the corner crop, `exploreProgress`, the display pass-throughs — stays in Task 6.
 
 **Files:**
-- Modify: `firmware/micromouse/constants.h` (add size bounds)
-- Modify: `firmware/micromouse/mazeMapper.h:86-88` (constructor), `:91` (add `gridSize`/`cellCount`/`configure`), `:97-134` (`begin`), `:416` (`inside`), and the private data block near `:751`
+- Modify: `firmware/micromouse/constants.h:95-96` (size bounds)
+- Modify: `firmware/micromouse/mazeMapper.h:68-71` (add `RunConfig` under `Cell`), `:86-88` (constructor), `:91` (add accessors and `configure`), `:97-134` (`begin`), `:416` (`inside`), private data near `:751`
+- Modify: `firmware/micromouse/mazeRunner.h:47-56` (constructor, add `configure`)
+- Modify: `firmware/micromouse/unseenMaze.h` (templates at `MAZE_SIZE_MAX`, drop the configuration globals, call the self-check)
 - Create: `firmware/micromouse/selfCheck.h`
-- Modify: `firmware/micromouse/unseenMaze.h` (include and call the self-check)
 
 **Interfaces:**
 - Consumes: `MICROMOUSE_DEBUG` from Task 2.
 - Produces:
   - `constexpr uint8_t MAZE_SIZE_MIN = 2;` and `constexpr uint8_t MAZE_SIZE_MAX = 16;`
+  - `struct RunConfig { uint8_t size; Cell start; Direction heading; Cell goal; };` in `mazeMapper.h`
   - `MazeMapper<N>::MazeMapper()` — default constructor, no arguments
   - `bool MazeMapper<N>::configure(uint8_t gridSize, Cell start, Direction heading, Cell goal)`
-  - `uint8_t MazeMapper<N>::gridSize() const`
-  - `uint16_t MazeMapper<N>::cellCount() const`
-  - `bool runSelfChecks()` in `selfCheck.h`, defined only under `MICROMOUSE_DEBUG`
+  - `uint8_t MazeMapper<N>::gridSize() const`, `uint16_t MazeMapper<N>::cellCount() const`
+  - `MazeRunner<N>::MazeRunner(LIDAR&, PSPlanner&)` and `bool MazeRunner<N>::configure(const RunConfig&)`
+  - `bool runSelfChecks(MazeMapper<N>&)` in `selfCheck.h`, defined only under `MICROMOUSE_DEBUG`
 
 - [ ] **Step 1: Add the size bounds to `constants.h`**
 
@@ -356,7 +360,6 @@ Create `firmware/micromouse/selfCheck.h`:
 
 #include "constants.h"
 #include "mazeMapper.h"
-#include "mazeWallMap.h"
 #include "types.h"
 
 // Linter hidden as this is a header-only library
@@ -370,9 +373,9 @@ inline bool checkOne(const char* what, bool ok) {
     return ok;
 }
 
-// One grid size, end to end. The mapper and wall map are the live ones.
-template <size_t N, typename WallMapT>
-bool selfCheckGrid(MazeMapper<N>& mapper, const WallMapT& wallMap, uint8_t n) {
+// One grid size, end to end, on the live mapper.
+template <size_t N>
+bool selfCheckGrid(MazeMapper<N>& mapper, uint8_t n) {
     Serial.print(F("self-check n="));
     Serial.println(n);
 
@@ -401,23 +404,18 @@ bool selfCheckGrid(MazeMapper<N>& mapper, const WallMapT& wallMap, uint8_t n) {
     ok = checkOne("markWall accepted a cell outside n",
                   !mapper.markWall(Cell{static_cast<int8_t>(n), 0}, North)) && ok;
 
-    // The wall map's slot space is the selected grid, not the capacity.
-    const size_t expect = (static_cast<size_t>(n) + 1) * n + static_cast<size_t>(n) * (n + 1) +
-                          (static_cast<size_t>(n) + 1) * (n + 1);
-    ok = checkOne("wallMap.size() is not the slot count for n", wallMap.size() == expect) && ok;
-
     return ok;
 }
 
-template <size_t N, typename WallMapT>
-bool runSelfChecks(MazeMapper<N>& mapper, const WallMapT& wallMap) {
+template <size_t N>
+bool runSelfChecks(MazeMapper<N>& mapper) {
     // A plain array, not an initializer_list: nothing else in this tree pulls
     // <initializer_list> in and a debug-only header is a poor place to start.
     const uint8_t sizes[] = {2, 5, 9, MAZE_SIZE_MAX};
 
     bool ok = true;
     for (uint8_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
-        ok = selfCheckGrid(mapper, wallMap, sizes[i]) && ok;
+        ok = selfCheckGrid(mapper, sizes[i]) && ok;
     }
 
     ok = checkOne("configure accepted a size below MAZE_SIZE_MIN",
@@ -440,7 +438,7 @@ In `unseenMaze.h`, add `#include "selfCheck.h"` to the include block, and at the
 
 ```cpp
 #ifdef MICROMOUSE_DEBUG
-    runSelfChecks(runner.mapper, wallMap);
+    runSelfChecks(runner.mapper);
 #endif
 ```
 
@@ -452,7 +450,23 @@ cd /Users/zimmylevi/Desktop/Uni/MTRN3100/Micromouse && ./compile.sh --debug
 
 Expected: **FAIL**, with errors on `mapper.configure`, `mapper.gridSize` and `mapper.cellCount` being undefined members. A plain `./compile.sh` still succeeds, because the self-check is not compiled.
 
-- [ ] **Step 4: Give `MazeMapper` its runtime grid**
+- [ ] **Step 4: Add `RunConfig` to `mazeMapper.h`**
+
+It goes directly under `struct Cell` (`mazeMapper.h:68-71`), **not** in `types.h`: `Cell` is declared here, and `types.h` is included *by* this file, so it cannot see `Cell`. `Direction` comes from `types.h`, which this file already includes.
+
+```cpp
+// Everything about a run that is chosen rather than measured: the maze the
+// robot has been put in, and where in it the job starts and ends. Filled by
+// startupUI.h at boot and handed to MazeRunner::configure().
+struct RunConfig {
+    uint8_t   size;
+    Cell      start;
+    Direction heading;
+    Cell      goal;
+};
+```
+
+- [ ] **Step 5: Give `MazeMapper` its runtime grid**
 
 Replace the constructor at `mazeMapper.h:86-88`:
 
@@ -505,7 +519,7 @@ Add to the private data block near line 751:
     uint8_t n = 0;
 ```
 
-- [ ] **Step 5: Point `inside()` at the runtime grid**
+- [ ] **Step 6: Point `inside()` at the runtime grid**
 
 At `mazeMapper.h:416`, replace:
 
@@ -519,7 +533,7 @@ with:
         return c.x >= 0 && c.x < static_cast<int>(n) && c.y >= 0 && c.y < static_cast<int>(n);
 ```
 
-- [ ] **Step 6: Seed the perimeter at the runtime boundary**
+- [ ] **Step 7: Seed the perimeter at the runtime boundary**
 
 In `begin()`, replace the perimeter loop at lines 124-129 with:
 
@@ -536,7 +550,7 @@ In `begin()`, replace the perimeter loop at lines 124-129 with:
         }
 ```
 
-**Leave every other loop in this file at `N`.** The clearing loop above it, and the sweeps in `distancesFrom`, `refreshImproving`, `planMove` and `buildShortestPath`, are array initialisation over the full capacity. Expansion in all of them is gated by `inside(next)`, so cells outside `n` stay `Unreachable` and are never entered. Iterating 256 cells instead of n² is a few microseconds, and it removes the entire class of "stale data outside n" bug. Add a comment on the clearing loop saying so:
+**Leave every other loop in this file at `N`.** The clearing loop above it, and the sweeps in `distancesFrom`, `refreshImproving`, `planMove` and `buildShortestPath`, are array initialisation over the full capacity. Expansion in all of them is gated by `inside(next)`, so cells outside `n` stay `Unreachable` and are never entered. Iterating 256 cells instead of n^2 is a few microseconds, and it removes the entire class of "stale data outside n" bug. Add a comment on the clearing loop saying so:
 
 ```cpp
         // The whole capacity, not just the selected grid: these arrays outlive
@@ -545,25 +559,76 @@ In `begin()`, replace the perimeter loop at lines 124-129 with:
         // keeps the search out of that region regardless; this keeps it clean.
 ```
 
-- [ ] **Step 7: Build and run the self-check**
+- [ ] **Step 8: Take the configuration out of `MazeRunner`'s constructor**
 
-```bash
-cd /Users/zimmylevi/Desktop/Uni/MTRN3100/Micromouse && ./compile.sh --debug
+This is what makes the tree compile again: `MazeRunner`'s member-init list calls the constructor Step 5 just deleted.
+
+Replace `mazeRunner.h:47-56`:
+
+```cpp
+    MazeRunner(
+        LIDAR& lidar,
+        PSPlanner& planner,
+        const Cell& startCell,
+        Direction startHeading,
+        const Cell& goalCell
+    ) :
+        lidar(lidar), planner(planner), mapper(startCell, startHeading, goalCell) {}
 ```
 
-Expected: clean. The `wallMap.size()` assertion will still fail at runtime for every n except 9 — `MazeWallMap` is still strided on the capacity, and Task 5 fixes it. Everything else should pass. Flash and read Serial at 115200 to confirm:
+with:
 
-```bash
-./compile.sh --debug --flash
+```cpp
+    MazeRunner(LIDAR& lidar, PSPlanner& planner) : lidar(lidar), planner(planner) {}
+
+    // The run's configuration, which is chosen at boot rather than compiled in.
+    // False if the mapper rejects the size; the start and goal are validated by
+    // begin(), which is where they have always been validated.
+    bool configure(const RunConfig& cfg) {
+        return mapper.configure(cfg.size, cfg.start, cfg.heading, cfg.goal);
+    }
 ```
 
-Expected on the wire: four `self-check n=` blocks, with only `wallMap.size() is not the slot count for n` failing, and a final `self-check FAILED`.
+- [ ] **Step 9: Switch `unseenMaze.h` to the capacity**
 
-- [ ] **Step 8: Commit**
+Delete the configuration globals and the `MAZE_SIZE` constant with its comment block:
+
+```cpp
+constexpr uint8_t MAZE_SIZE = 9;
+using mazeMapper = MazeMapper<MAZE_SIZE>;
+Cell startCell = {1, 1};
+Direction startHeading = North;
+Cell goalCell  = {5, 5};
+```
+
+Replace with:
+
+```cpp
+using mazeMapper = MazeMapper<MAZE_SIZE_MAX>;
+```
+
+Change the runner construction to `MazeRunner<MAZE_SIZE_MAX> runner(lidar, psp);` and every other `MAZE_SIZE` to `MAZE_SIZE_MAX` — the `MazeWallMap<MAZE_SIZE>`, `LidarObserver<MazeWallMap<MAZE_SIZE>>` and `OLEDScreen<MazeWallMap<MAZE_SIZE>>` declarations.
+
+Then, at the top of `runBegin()` immediately after the self-check call, add a temporary configuration so the tree still runs. Task 10 replaces it with the wizard's output:
+
+```cpp
+    // TEMPORARY -- replaced by runStartupUI() in the bring-up reorder, Task 10.
+    runner.configure(RunConfig{9, Cell{1, 1}, North, Cell{5, 5}});
+```
+
+- [ ] **Step 10: Build and run the self-check**
 
 ```bash
-git add firmware/micromouse
-git commit -m "MazeMapper: runtime grid size with N as capacity"
+cd /Users/zimmylevi/Desktop/Uni/MTRN3100/Micromouse && ./compile.sh && ./compile.sh --debug
+```
+
+Expected: both clean.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add -A firmware/micromouse
+git commit -m "Runtime maze grid: MazeMapper carries n, MazeRunner is configured"
 ```
 
 ---
@@ -724,7 +789,26 @@ Also update the comment above `candidates()`: "which is what keeps a 280-slot sw
 
 Update the comment above `nsWall` — "so a runs 0..N inclusive" and "at a = N the upper one is, and `hasWall(Cell{N - 1, b}, North)` covers it" should read `n` rather than `N`. Same for the index-space comment at lines 47-54.
 
-- [ ] **Step 6: Build and run the self-check**
+- [ ] **Step 6: Extend the self-check to cover the slot count**
+
+`selfCheck.h` currently tests the mapper alone. Give it the wall map too, so the
+stride change is asserted rather than eyeballed. Change both signatures to take
+it, add `#include "mazeWallMap.h"`, and add this check to the end of
+`selfCheckGrid`:
+
+```cpp
+    // The wall map's slot space is the selected grid, not the capacity.
+    const size_t expect = (static_cast<size_t>(n) + 1) * n + static_cast<size_t>(n) * (n + 1) +
+                          (static_cast<size_t>(n) + 1) * (n + 1);
+    ok = checkOne("wallMap.size() is not the slot count for n", wallMap.size() == expect) && ok;
+```
+
+Signatures become `selfCheckGrid(MazeMapper<N>& mapper, const WallMapT& wallMap, uint8_t n)`
+and `runSelfChecks(MazeMapper<N>& mapper, const WallMapT& wallMap)`, both with
+`template <size_t N, typename WallMapT>`. Update the call in `unseenMaze.h` to
+`runSelfChecks(runner.mapper, wallMap)`.
+
+- [ ] **Step 7: Build and run the self-check**
 
 ```bash
 cd /Users/zimmylevi/Desktop/Uni/MTRN3100/Micromouse && ./compile.sh --debug --flash
@@ -732,78 +816,29 @@ cd /Users/zimmylevi/Desktop/Uni/MTRN3100/Micromouse && ./compile.sh --debug --fl
 
 Expected on Serial at 115200: four `self-check n=` blocks with no `FAIL:` lines, then `self-check PASSED`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add firmware/micromouse/mazeWallMap.h
+git add firmware/micromouse/mazeWallMap.h firmware/micromouse/selfCheck.h firmware/micromouse/unseenMaze.h
 git commit -m "MazeWallMap: slot space follows the runtime grid"
 ```
 
 ---
 
-### Task 6: `MazeRunner` configuration, and drop the corner crop
+### Task 6: Drop the corner crop, fix the progress meter, decouple the display
+
+Three independent cleanups in `MazeRunner`, none of which the Task 4 restructure needed.
 
 **Files:**
-- Modify: `firmware/micromouse/mazeRunner.h:47-56` (constructor), `:62-89` (`begin`), `:91-108` (delete the crop block), `:135-138` (`exploreProgress`), and add pass-throughs near `:123`
+- Modify: `firmware/micromouse/mazeRunner.h:91-108` (delete the crop block), `:62-89` (`begin`), `:135-138` (`exploreProgress`), pass-throughs near `:123`
 - Modify: `firmware/micromouse/constants.h:8` (delete `MAZE_CORNER_CROP`)
-- Modify: `firmware/micromouse/unseenMaze.h` (drop the global start/heading/goal, use the pass-throughs)
-- Modify: `firmware/micromouse/mazeMapper.h` (add `RunConfig` beside `Cell`)
+- Modify: `firmware/micromouse/unseenMaze.h` (`screenMode`, `screenMetric`)
 
 **Interfaces:**
-- Consumes: `MazeMapper<N>::configure`, `gridSize`, `cellCount` from Task 4.
-- Produces:
-  - `struct RunConfig { uint8_t size; Cell start; Direction heading; Cell goal; };` in `mazeMapper.h`
-  - `MazeRunner<N>::MazeRunner(LIDAR&, PSPlanner&)`
-  - `bool MazeRunner<N>::configure(const RunConfig&)`
-  - `bool MazeRunner<N>::homing() const`, `bool MazeRunner<N>::faulted() const`, `float MazeRunner<N>::homeProgress() const`
+- Consumes: `MazeMapper<N>::cellCount()` from Task 4.
+- Produces: `bool MazeRunner<N>::homing() const`, `bool MazeRunner<N>::faulted() const`, `float MazeRunner<N>::homeProgress() const`.
 
-- [ ] **Step 1: Add `RunConfig` to `mazeMapper.h`**
-
-It goes directly under `struct Cell` (`mazeMapper.h:68-71`), **not** in `types.h`:
-`Cell` is declared here, and `types.h` is included *by* this file, so it cannot
-see `Cell`. `Direction` comes from `types.h`, which this file already includes.
-
-```cpp
-// Everything about a run that is chosen rather than measured: the maze the
-// robot has been put in, and where in it the job starts and ends. Filled by
-// startupUI.h at boot and handed to MazeRunner::configure().
-struct RunConfig {
-    uint8_t   size;
-    Cell      start;
-    Direction heading;
-    Cell      goal;
-};
-```
-
-- [ ] **Step 2: Take the configuration out of the constructor**
-
-Replace `mazeRunner.h:47-56`:
-
-```cpp
-    MazeRunner(
-        LIDAR& lidar,
-        PSPlanner& planner,
-        const Cell& startCell,
-        Direction startHeading,
-        const Cell& goalCell
-    ) :
-        lidar(lidar), planner(planner), mapper(startCell, startHeading, goalCell) {}
-```
-
-with:
-
-```cpp
-    MazeRunner(LIDAR& lidar, PSPlanner& planner) : lidar(lidar), planner(planner) {}
-
-    // The run's configuration, which is chosen at boot rather than compiled in.
-    // False if the mapper rejects the size; the start and goal are validated by
-    // begin(), which is where they have always been validated.
-    bool configure(const RunConfig& cfg) {
-        return mapper.configure(cfg.size, cfg.start, cfg.heading, cfg.goal);
-    }
-```
-
-- [ ] **Step 3: Delete the corner crop**
+- [ ] **Step 1: Delete the corner crop**
 
 Delete `mazeRunner.h:91-108` entirely — the `croppedCells` and `reachableCells` members, `croppedCell()` and `sealCroppedCells()`. Delete the two lines that call them in `begin()`:
 
@@ -812,7 +847,7 @@ Delete `mazeRunner.h:91-108` entirely — the `croppedCells` and `reachableCells
         reachableCells = static_cast<uint16_t>(MazeMapper<N>::MAX_CELLS - croppedCells);
 ```
 
-Delete `constexpr uint8_t MAZE_CORNER_CROP = 1;` from `constants.h:8`, and its comment if it has one. If `etl/algorithm.h`'s `etl::min` is now unused in `mazeRunner.h`, leave the include — other code in the file may use it; only remove it if `./compile.sh` warns.
+Delete `constexpr uint8_t MAZE_CORNER_CROP = 1;` from `constants.h:8`, and its comment if it has one. If `./compile.sh` then warns that `etl::min` or an ETL include is unused in `mazeRunner.h`, remove it; otherwise leave the includes alone.
 
 Add a short note where the crop used to be, so the next reader knows it was a decision:
 
@@ -825,7 +860,7 @@ Add a short note where the crop used to be, so the next reader knows it was a de
     // of the maze is unreachable.
 ```
 
-- [ ] **Step 4: Fix `exploreProgress()`**
+- [ ] **Step 2: Fix `exploreProgress()`**
 
 Replace `mazeRunner.h:135-138`:
 
@@ -846,9 +881,9 @@ with:
     }
 ```
 
-Against `MAX_CELLS` this was correct only while the template parameter *was* the grid. With it as a capacity, a 5x5 maze would have read 10% at completion.
+Against `MAX_CELLS` this was correct only while the template parameter *was* the grid. Now that it is a capacity, a 5x5 maze would read 10% at completion.
 
-- [ ] **Step 5: Add the mapper pass-throughs**
+- [ ] **Step 3: Add the mapper pass-throughs**
 
 Directly under the public `MazeMapper<N> mapper;` member, add:
 
@@ -861,50 +896,23 @@ Directly under the public `MazeMapper<N> mapper;` member, add:
     float homeProgress() const { return mapper.homeProgress(); }
 ```
 
-- [ ] **Step 6: Update `unseenMaze.h`**
-
-Delete the four configuration globals and the `MAZE_SIZE` constant with its comment block:
-
-```cpp
-constexpr uint8_t MAZE_SIZE = 9;
-using mazeMapper = MazeMapper<MAZE_SIZE>;
-Cell startCell = {1, 1};
-Direction startHeading = North;
-Cell goalCell  = {5, 5};
-```
-
-Replace with:
-
-```cpp
-using mazeMapper = MazeMapper<MAZE_SIZE_MAX>;
-```
-
-Change the runner construction to `MazeRunner<MAZE_SIZE_MAX> runner(lidar, psp);` and every other `MAZE_SIZE` to `MAZE_SIZE_MAX` (the `MazeWallMap<MAZE_SIZE>`, `LidarObserver<MazeWallMap<MAZE_SIZE>>` and `OLEDScreen<MazeWallMap<MAZE_SIZE>>` declarations).
+- [ ] **Step 4: Use them in `unseenMaze.h`**
 
 In `screenMode()` and `screenMetric()`, replace `runner.mapper.homing()` -> `runner.homing()`, `runner.mapper.faulted()` -> `runner.faulted()`, `runner.mapper.homeProgress()` -> `runner.homeProgress()`.
 
-- [ ] **Step 7: Give `runBegin()` a configuration to work with, temporarily**
-
-Task 10 replaces this with the wizard's output. For now, so the tree builds and runs, put a literal at the top of `runBegin()` after the self-check:
-
-```cpp
-    // TEMPORARY -- replaced by runStartupUI() in the bring-up reorder.
-    runner.configure(RunConfig{9, Cell{1, 1}, North, Cell{5, 5}});
-```
-
-- [ ] **Step 8: Build, and check the self-check still passes**
+- [ ] **Step 5: Build, and check the self-check still passes**
 
 ```bash
-cd /Users/zimmylevi/Desktop/Uni/MTRN3100/Micromouse && ./compile.sh && ./compile.sh --debug --flash
+cd /Users/zimmylevi/Desktop/Uni/MTRN3100/Micromouse && ./compile.sh && ./compile.sh --debug
 ```
 
-Expected: both clean, `self-check PASSED` on the wire, and the robot behaves as it did before this plan started — same 9x9 maze, same start and goal.
+Expected: both clean.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add -A firmware/micromouse
-git commit -m "MazeRunner: runtime configuration; drop the corner crop"
+git commit -m "Drop the corner crop; scale exploreProgress to the runtime grid"
 ```
 
 ---
@@ -1572,10 +1580,10 @@ Keep the `Serial.begin` / `delay(1000)` / `Serial.println("Beginning setup:")` o
 
 - [ ] **Step 4: Remove the temporary configuration from `unseenMaze.h`**
 
-Delete the two lines added in Task 6 Step 7:
+Delete the two lines added in Task 4 Step 9:
 
 ```cpp
-    // TEMPORARY -- replaced by runStartupUI() in the bring-up reorder.
+    // TEMPORARY -- replaced by runStartupUI() in the bring-up reorder, Task 10.
     runner.configure(RunConfig{9, Cell{1, 1}, North, Cell{5, 5}});
 ```
 
