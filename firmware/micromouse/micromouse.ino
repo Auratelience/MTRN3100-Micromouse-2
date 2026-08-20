@@ -55,7 +55,7 @@ LIDAR lidar(std::array<LidarSensor*, 3>{&frontLS, &leftLS, &rightLS});
 
 // The velocity side of the fusion is the same either way. The pose side is not
 // -- it is the map the observer localises against that differs -- so obs_p and
-// the SensorFusion built from both live in the task header.
+// the SensorFusion built from both live in the run header.
 //
 // The wheels alone. The gyro used to be blended in here as an omega, at four
 // times the wheels' weight in heading, which is what made theta depend on the
@@ -72,7 +72,7 @@ const std::array<VelocitySource, 1> obs_v = {{
     {&wheel_obsv, FusionWeights::DefaultVTrust}
 }};
 
-// Loop period, seconds. At file scope rather than local to loop() so a task
+// Loop period, seconds. At file scope rather than local to loop() so the run
 // header or a trace can read the rate the control loop is actually running at.
 float dt = 0;
 

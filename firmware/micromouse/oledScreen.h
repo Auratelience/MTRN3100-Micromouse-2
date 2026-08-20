@@ -35,7 +35,7 @@ struct OLEDMetric {
     float fraction = 0.0f;
 };
 
-// One screen for every task, in two panes:
+// One screen for the run, in two panes:
 //
 //     +---------- 64 px ----------+--- 62 px ---+
 //     | walls as lines, obstacles | EXPL        |  mode
@@ -52,7 +52,7 @@ struct OLEDMetric {
 // map's business, and a discovered map simply grows walls as the run goes on.
 //
 // The map is drawn as geometry and not as a cell lattice. That is deliberate
-// for both tasks, though for different reasons: maze_map.h is fitted from a
+// for both map types, though for different reasons: maze_map.h is fitted from a
 // photograph, so it carries five free-standing cylinders and panels a degree or
 // two off the lattice, none of which survives being snapped to a grid; and
 // MazeWallMap is what the lidar localises against, so drawing it is drawing the
@@ -61,7 +61,7 @@ struct OLEDMetric {
 //
 // Everything the screen shows arrives through a delegate. It therefore knows
 // nothing about MotionPlanner, MazeRunner or MazeMapper, which is what lets one
-// class serve a task that races a precomputed route and a task that discovers
+// class serve a run that races a precomputed route and a run that discovers
 // its own.
 template <typename MapT>
 class OLEDScreen {
