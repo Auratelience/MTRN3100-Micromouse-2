@@ -92,8 +92,8 @@ constexpr float TURN_ENVELOPE_MARGIN         = 0.8f;
 constexpr float ARC_BEHIND_START_TOL_MM      = 5.0f;
 
 // MAZE
-// Cells per side lives in task43.h, next to the MazeRunner and MazeWallMap
-// instances it sizes: 4.3 is the only task that builds a MazeMapper.
+// Cells per side lives in unseenMaze.h, next to the MazeRunner and MazeWallMap
+// instances it sizes: that is the only build that constructs a MazeMapper.
 //
 // Physical size of one grid cell, mm. Full-size Micromouse uses 180mm,
 // half-size 168mm. Shared by the path factory and the instruction runner.

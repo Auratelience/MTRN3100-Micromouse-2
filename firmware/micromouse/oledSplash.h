@@ -38,7 +38,7 @@ static_assert(
 // reason alone. It was written at the end of setup() first, and the logo lasted
 // under ~10 ms there: the IMU and the lidar are where bring-up actually spends
 // its time, and both had already run, leaving only two Serial prints and
-// taskBegin() before loop() drew over it. Nothing here can fix that from the
+// runBegin() before loop() drew over it. Nothing here can fix that from the
 // inside -- a splash lasts exactly as long as the work below it.
 //
 // Deliberately not gated on display.due(): that throttle is consuming and only

@@ -1,24 +1,19 @@
-// Task 4.3 -- explore, plan, race
+// Unseen Maze -- explore, plan, race
 //
 // Zimmy Levi z5587840
 //
-// Selected by TASK in micromouse.ino, which includes this file part way down
-// the sketch rather than up with the other includes: everything here is built
-// from lidar, obs_v, dt and display, so it has to come after them. The sketch
-// is one translation unit, so those names are already in scope and this header
-// declares no hardware of its own.
+// Included by micromouse.ino part way down the sketch rather than up with the
+// other headers: everything here is built from lidar, obs_v, dt and display,
+// so it has to come after them. The sketch is one translation unit, so those
+// names are already in scope and this header declares no hardware of its own.
 //
-// Its counterpart is task42.h. Both declare the same names -- lidar_obsv,
-// obs_p, sf, fusedPose(), and the three task hooks below -- so setup() and
-// loop() are written once and neither is wrapped in an #if.
-//
-// The robot is given a start cell, a start heading and a goal, and nothing
-// else. It explores until the goal is reachable, plans a route over what it
-// found, and drives it. The observer localises against those discovered walls:
-// 4.3 has no photograph of the maze -- finding it is the exercise -- so
-// MazeWallMap stands in for the exported map 4.1/4.2 uses. LidarObserver is
-// templated on the map type and MazeWallMap offers Map's cast()/candidates(),
-// so the same observer serves both.
+// The robot is given a maze size, a start cell, a start heading and a goal, all
+// chosen at boot through startupUI.h, and nothing else. It explores until the
+// goal is reachable, plans a route over what it found, and drives it. The
+// observer localises against those discovered walls: there is no photograph of
+// the maze -- finding it is the exercise -- so MazeWallMap stands in for an
+// exported map. LidarObserver is templated on the map type and MazeWallMap
+// offers Map's cast()/candidates(), so one observer serves both.
 
 #pragma once
 
@@ -26,7 +21,6 @@
 
 #include <Embedded_Template_Library.h>
 #include <etl/delegate.h>
-#include <sys/wait.h>
 
 #include "constants.h"
 #include "mazeMapper.h"
@@ -57,7 +51,7 @@ constexpr uint8_t MAZE_SIZE = 9;
 
 using mazeMapper = MazeMapper<MAZE_SIZE>;
 // The complete maze configuration: the runner is handed it at construction and
-// taskBegin() only has to start it.
+// runBegin() only has to start it.
 //
 // Cells are the grid convention from types.h -- (x, y) with x forward and y
 // left, so North steps +x and West steps +y. Start in a corner facing North,
@@ -68,14 +62,6 @@ Direction startHeading = North;
 Cell goalCell  = {5, 5};
 
 MazeRunner<MAZE_SIZE> runner(lidar, psp, startCell, startHeading, goalCell);
-
-// bool lambda = []() {
-//     runner.mapper.hasWall(Cell{7, 8}, South);
-//     runner.mapper.hasWall(Cell{8, 1}, South);
-//     runner.mapper.hasWall(Cell{7, 0}, South);
-//     runner.mapper.hasWall(Cell{0, 1}, South);
-//     return true;
-// }();
 
 MazeWallMap<MAZE_SIZE> wallMap(runner.mapper);
 
@@ -156,9 +142,8 @@ OLEDScreen<MazeWallMap<MAZE_SIZE>> screen(
     etl::delegate<OLEDMetric()>::create<screenMetric>()
 );
 
-// Called from setup(), after the shared bring-up and under its "Loading
-// goal..." print, which this is expected to terminate.
-void taskBegin() {
+// Called from setup(), after the shared bring-up.
+void runBegin() {
     if (!runner.begin()) {
         Serial.println("\b\b\b [MAZE RUNNER REJECTED START OR GOAL]");
     } else {
@@ -178,7 +163,7 @@ void taskBegin() {
 
 // Explore, plan, race. Non-blocking, and it commands zero once done, so
 // nothing downstream has to special-case a stopped robot.
-Velocity taskUpdate(const Pose& pose, float dt) {
+Velocity runUpdate(const Pose& pose, float dt) {
     return runner.update(pose, dt);
 }
 
@@ -188,7 +173,7 @@ Velocity taskUpdate(const Pose& pose, float dt) {
 // The route is handed over unconditionally. It is empty until Plan has run, and
 // a route shorter than two points draws nothing, so this needs no idea of which
 // phase the run is in.
-void taskRender() {
+void runRender() {
     screen.setRoute(runner.route());
     screen.update();
 }

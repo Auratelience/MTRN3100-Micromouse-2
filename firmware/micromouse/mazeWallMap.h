@@ -17,10 +17,10 @@
 // A Map-shaped view of MazeMapper's wall bits.
 //
 // maze_map.h is fitted by computer vision from a photograph of the maze, which
-// is exactly what task 4.3 does not have: the maze is unknown, and finding it
-// is the job. So LidarObserver cannot localise against it. It localises
-// against this instead -- the walls the robot has actually seen, plus the
-// perimeter and any priors, converted to panels and posts on demand.
+// is exactly what an unseen maze does not give you: the maze is unknown, and
+// finding it is the job. So LidarObserver cannot localise against it. It
+// localises against this instead -- the walls the robot has actually seen,
+// plus the perimeter and any priors, converted to panels and posts on demand.
 //
 // Nothing is stored. Every obstacle is derived from a bit in the mapper, so
 // this costs one reference of RAM and is never stale: a wall discovered on one
@@ -29,7 +29,7 @@
 // Duck-typed against Map<S> rather than derived from it. LidarObserver and
 // OLEDScreen need only cast(), candidates(), size(), present() and operator[],
 // and templating them on the map type keeps both working with either -- the
-// exported map for tasks 4.1 and 4.2, this one for 4.3.
+// exported map where there is one, this one where the maze is unseen.
 //
 // What it gives up: a fitted map carries the real maze, tilted panels and free
 // standing cylinders included, whereas this is a perfect lattice. It is

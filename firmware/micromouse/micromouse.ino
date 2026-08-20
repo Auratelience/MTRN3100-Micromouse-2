@@ -16,22 +16,6 @@
 #include "sensorFusion.h"
 #include "types.h"
 
-// WHICH TASK TO BUILD
-//
-// 42 -- task42.h: drives the pre-computed maze_path.h route through
-//       MotionPlanner and localises against the exported maze_map.h.
-// 43 -- task43.h: explores the maze, plans a route over what it found and
-//       races it, localising against the walls it discovered.
-//
-// The two are alternatives, not layers: MotionPlanner's segment array alone is
-// about 10 kB of RAM. Everything below this line is shared, and the selected
-// header is included further down, once the objects it builds on exist.
-#define TASK 43
-
-#if TASK != 42 && TASK != 43
-#error "TASK must be 42 or 43"
-#endif
-
 Motor<0> leftMotor(
     WHEEL_RADIUS,
     MOT_1_DIR,
@@ -94,14 +78,9 @@ float dt = 0;
 
 OLEDDisplay display;
 
-// The task, included here rather than with the headers above because it builds
-// on lidar, obs_v, dt and display. Both headers declare the same names, so
-// setup() and loop() below are written once and need no #if of their own.
-#if TASK == 42
-#include "task42.h"
-#else
-#include "task43.h"
-#endif
+// The run, included here rather than with the headers above because it builds
+// on lidar, obs_v, dt and display.
+#include "unseenMaze.h"
 
 // kd injects noise since loop speed means minimum α = dω/dt is 9 rad/s
 MotionController mc(leftMotor, rightMotor, kinematics, 10.0f, 3.0f, 0.0f);
@@ -122,7 +101,7 @@ void setup() {
     // point: display.init() needs nothing but Wire, and the splash is only
     // on screen for as long as the bring-up *below* it takes. Down at the end
     // of setup(), where this used to sit, the only things left to outlast were
-    // two Serial prints and taskBegin() -- so the logo was overwritten by the
+    // two Serial prints and runBegin() -- so the logo was overwritten by the
     // first loop() frame inside ~10 ms and all that showed was the clear.
     //
     // What makes it readable now is imu_obsv.init(), which is not a settle
@@ -174,7 +153,7 @@ void setup() {
 
     // NOTE THAT X-AXIS IS FORWARDS: Y-AXIS IS LEFT!!!
 
-    taskBegin();
+    runBegin();
 
     previous_time = micros();
     Serial.println("Setup complete!");
@@ -191,10 +170,10 @@ void loop() {
     sf.update(dt);
     Pose pose = sf.estimate.pose();
     Velocity current = sf.estimate.velocity();
-    Velocity desired = taskUpdate(pose, dt);
+    Velocity desired = runUpdate(pose, dt);
     mc.update(desired, current, dt);
 
-    taskRender();
+    runRender();
 
     // DIAGNOSTIC: gyro read failures and bus recoveries, rate limited so the
     // report cannot itself stall the loop it is measuring.

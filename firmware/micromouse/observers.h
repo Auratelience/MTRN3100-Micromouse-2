@@ -321,9 +321,9 @@ class FrontLidarObserver : public ObserverP {
 // uses, because SensorFusion never hands its pose sources the estimate they
 // are correcting. In the sketch:
 //
-//     MazeWallMap<MAZE_SIZE> wallMap(runner.map());        // 4.3, discovered
+//     MazeWallMap<MAZE_SIZE> wallMap(runner.map());        // discovered
 //     LidarObserver<MazeWallMap<MAZE_SIZE>> lidar_obsv(lidar, wallMap);
-//     // or, for 4.1 | 4.2, against the exported map:
+//     // or, against the exported map:
 //     // LidarObserver<Map<MAZE_OBSTACLE_COUNT>> lidar_obsv(lidar, MAZE_MAP);
 //     const std::array<PoseSource, 1> obs_p = {{{&lidar_obsv, FusionWeights::XYPTrust}}};
 //     SensorFusion sf(obs_v, obs_p);
@@ -336,9 +336,9 @@ class FrontLidarObserver : public ObserverP {
 // for bench testing a single solve.
 // Templated on the map type, not on an obstacle count. Anything offering
 // cast() and candidates() with Map's signatures will do, which is what lets
-// the same observer localise against the exported Map<S> for tasks 4.1 and
-// 4.2 and against MazeWallMap -- the walls the robot has discovered for
-// itself -- for 4.3, where there is no exported map to have.
+// the same observer localise against the exported map, or against
+// MazeWallMap -- the walls the robot has discovered for itself -- where
+// there is no exported map to have.
 template <typename MapT>
 class LidarObserver : public ObserverP {
     public:
