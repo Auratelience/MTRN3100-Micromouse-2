@@ -175,8 +175,11 @@ void loop() {
 
     runRender();
 
-    // DIAGNOSTIC: gyro read failures and bus recoveries, rate limited so the
-    // report cannot itself stall the loop it is measuring.
+#ifdef MICROMOUSE_DEBUG
+    // Gyro read failures and bus recoveries, rate limited so the report cannot
+    // itself stall the loop it is measuring. Built only under ./compile.sh
+    // --debug: a periodic Serial write is a few ms of exactly the loop stall
+    // the IMU FIFO path exists to stop mattering.
     {
         static unsigned long reported = 0;
         static unsigned long last_report_ms = 0;
@@ -215,6 +218,7 @@ void loop() {
             ++rate_reports;
         }
     }
+#endif
 
     previous_time = current_time;
 }

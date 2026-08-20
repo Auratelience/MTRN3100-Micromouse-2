@@ -118,7 +118,7 @@ regenerate_splash() {
 
 usage() {
 	cat <<EOF
-Usage: ./scripts/build.sh [target] [--db] [--flash] [--port dev] [--help]
+Usage: ./scripts/build.sh [target] [--db] [--debug] [--flash] [--port dev] [--help]
                           [arduino-cli args...]
 
 Builds an Arduino sketch for $FQBN into build/ beside it,
@@ -149,6 +149,14 @@ Options:
               .bin/.elf is produced. Re-run after adding an #include from a new
               library. (A plain build writes the same file, so this is only
               worth using when you want the database without the binary.)
+  --debug     Compile with -DMICROMOUSE_DEBUG=1, which enables the boot
+              self-check for the runtime maze grid and the two diagnostic
+              reports in loop(). Off by default: those reports write to Serial
+              from inside the control loop, which costs it milliseconds.
+
+              Note that --db builds compile_commands.json without this define
+              unless --debug is passed too, so debug-only code reads as
+              inactive in the editor.
   --flash     Upload to the connected board after a successful build. The port
               is found by asking arduino-cli which serial ports have a board
               matching $FQBN on them, and is resolved
@@ -188,6 +196,7 @@ fi
 # A while loop rather than `for arg in "$@"` because --port has to consume the
 # argument after it.
 db_only=0
+debug=0
 flash=0
 port=
 passthru=()
@@ -195,6 +204,10 @@ while (($#)); do
 	case $1 in
 	--db)
 		db_only=1
+		shift
+		;;
+	--debug)
+		debug=1
 		shift
 		;;
 	--flash)
@@ -266,10 +279,16 @@ if [[ -d $BUILD_DIR ]]; then
 	rm -rf $BUILD_DIR/^.cache(N)
 fi
 
+# Extra -D flags for the sketch. compiler.cpp.extra_flags is the documented
+# arduino-cli hook for this, and the build directory is wiped every run, so a
+# define cannot survive into a later build that did not ask for it.
+defines=()
+((debug)) && defines=(--build-property "compiler.cpp.extra_flags=-DMICROMOUSE_DEBUG=1")
+
 mode=()
 ((db_only)) && mode=(--only-compilation-database)
 
-arduino-cli compile --fqbn "$FQBN" --build-path "$BUILD_DIR" "${mode[@]}" "${passthru[@]}" "$SKETCH_DIR"
+arduino-cli compile --fqbn "$FQBN" --build-path "$BUILD_DIR" "${mode[@]}" "${defines[@]}" "${passthru[@]}" "$SKETCH_DIR"
 
 if ((db_only)); then
 	echo "compile_commands.json -> $BUILD_DIR/compile_commands.json (no binary built)"
