@@ -76,8 +76,14 @@ grid**.
   `configure()` set the same three fields would be two ways to do one thing
 - `inside()` tests against `n`
 - `begin()` seeds the perimeter to `n`
-- every BFS bound (`distancesFrom`, the frontier pruning, `buildShortestPath`)
-  iterates to `n`, not `N`
+- **every other loop stays at `N`.** The clearing loop in `begin()` and the
+  sweeps in `distancesFrom`, `refreshImproving`, `planMove` and
+  `buildShortestPath` are array initialisation over the full capacity, and
+  expansion in all of them is already gated by `inside(next)` — so cells outside
+  `n` stay `Unreachable` and are never entered. Iterating 256 cells instead of
+  n^2 costs microseconds and removes the entire class of "stale data outside n"
+  bug. The semantic change in this file is therefore exactly two places:
+  `inside()` and the perimeter seeding.
 - new `cellCount()` returning `n * n`
 
 ### MazeWallMap<N>
@@ -308,9 +314,12 @@ Ample for every screen above.
 ```cpp
 struct UIChrome { bool leftButton, rightButton, leftDial, rightDial; };
 
-void drawChrome(OLEDDisplay&, const UIChrome&, long leftCount, long rightCount,
+void drawChrome(OLEDDisplay&, const UIChrome&, float leftAngle, float rightAngle,
                 bool leftBlink, bool rightBlink);
 ```
+
+Angles rather than raw counts: the chrome has no business knowing `ENC_CPR`, and
+`UIDial::angle()` already does that conversion.
 
 ## 4. Bring-up order
 
@@ -326,8 +335,11 @@ here.
 6. `runStartupUI(...)`, blocking
 7. 5 s countdown
 8. IMU init and `imu_obsv.init()` — the ~3 s zero-rate calibration
-9. **zero both encoders and re-seed `WheelObserver`** — the wheels were just
-   spun by hand
+9. **`wheel_obsv.reset()`** — the wheels were just spun by hand. The encoders
+   themselves need no zeroing: odometry integrates deltas, so only
+   `WheelObserver`'s cached `left_prev_rad` / `right_prev_rad` marks have to
+   move. Without this the first control tick sees the whole hand-spin as one
+   tick of motion.
 10. `sf.set(Pose{0, 0, directionToTheta(cfg.heading)})`
 11. `runner.configure(cfg)`, `runner.begin()`, `screen.init()`
 
