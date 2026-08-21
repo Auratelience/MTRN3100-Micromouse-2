@@ -124,18 +124,14 @@ OLEDScreen<MazeWallMap<MAZE_SIZE_MAX>> screen(
     etl::delegate<OLEDMetric()>::create<screenMetric>()
 );
 
-// Called from setup(), after the shared bring-up.
+// Called from setup(), after the shared bring-up and after runner.configure()
+// -- the wizard's size, start cell, start heading and goal are already
+// latched in by the time this runs, so all that is left is to seed the
+// perimeter and fit the display to it.
 void runBegin() {
 #ifdef MICROMOUSE_DEBUG
     runSelfChecks(runner.mapper, wallMap);
 #endif
-
-    // TEMPORARY -- replaced by runStartupUI() in the bring-up reorder, Task 10.
-    //
-    // 9 is the competition deck: maze_map.h describes its 10x10 post lattice,
-    // and ten post lines bound nine cells, with cell centres from -180 mm to
-    // 1260 mm on both axes.
-    runner.configure(RunConfig{9, Cell{1, 1}, North, Cell{5, 5}});
 
     if (!runner.begin()) {
         Serial.println("\b\b\b [MAZE RUNNER REJECTED START OR GOAL]");

@@ -86,6 +86,18 @@ class WheelObserver : public ObserverV {
         return true;
     }
 
+    // Re-seeds the deltas from where the wheels are now.
+    //
+    // The wizard is driven by turning the wheels by hand, so between this
+    // object's construction and the first control tick they may have moved a
+    // long way. Odometry integrates deltas, so the absolute counts do not
+    // matter and there is nothing to zero -- only the marks need moving.
+    void reset() {
+        left_prev_rad  = left.angularDisplacement();
+        right_prev_rad = right.angularDisplacement();
+        velocity       = {0, 0};
+    }
+
     private:
 
     BaseMotor& left;

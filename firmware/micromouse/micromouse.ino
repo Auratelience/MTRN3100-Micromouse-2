@@ -115,61 +115,58 @@ void setup() {
     i2cRepairer.begin();
     endStep(true, "");
 
-    // Straight after the bus and before everything slow, which is the whole
-    // point: display.init() needs nothing but Wire, and the splash is only
-    // on screen for as long as the bring-up *below* it takes. Down at the end
-    // of setup(), where this used to sit, the only things left to outlast were
-    // two Serial prints and runBegin() -- so the logo was overwritten by the
-    // first loop() frame inside ~10 ms and all that showed was the clear.
-    //
-    // What makes it readable now is imu_obsv.init(), which is not a settle
-    // delay but a 3 s measurement: IMU_STARTUP_SETTLE_MS then a
-    // IMU_CALIBRATION_MS window averaging the gyro's zero-rate output. With the
-    // lidar's ~90 ms on top, the logo holds for about 3.2 s, so it needs no
-    // delay() of its own -- it is showing during time the robot was already
-    // going to spend standing still.
     beginStep("Initialising OLED");
-    if (!display.init()) {
-        endStep(false, "OLED INIT FAILED");
-    } else {
-        drawSplash(display);
-        endStep(true, "");
-    }
+    const bool oledOk = display.init();
+    if (oledOk) drawSplash(display);
+    endStep(oledOk, "OLED INIT FAILED");
+    const unsigned long splashShownMs = millis();
 
+    // Before the splash hold, because the dials need them.
     beginStep("Initialising Motors");
     leftMotor.init();
     rightMotor.init();
     endStep(true, "");
 
+    // Also before the hold: the side lidars are the wizard's buttons, so they
+    // have to be live before it draws its first screen. ~90 ms of the 2 s.
+    beginStep("Initialising Lidar");
+    const bool lidarOk = lidar.init();
+    endStep(lidarOk, "VL6180X INIT FAILED");
+
+    while (millis() - splashShownMs < UI_SPLASH_MS) {}
+
+    // Blocking. The control loop does not exist yet, so there is nothing to
+    // starve, and the operator takes as long as they take.
+    const RunConfig cfg = runStartupUI(display, lidar, leftMotor, rightMotor, i2cRepairer);
+
+    // After the wizard, not before it: this is a 3 s measurement of the gyro's
+    // zero-rate output and it wants the robot settled, which it is not while
+    // someone is spinning its wheels.
     beginStep("Initialising IMU Observer (P)");
     if (!imu.init(IMU::GyroScale::DPS_1000, IMU::AccelScale::G_4, IMU::LowPassFrequency::HZ_44)) {
         endStep(false, "MPU6050 INIT FAILED");
     } else {
         imu_obsv.init();
-        if (!imu_obsv.ready()) {
-            endStep(false, "IMU OBSERVER INIT FAILED");
-        } else {
-            endStep(true, "");
-        }
+        endStep(imu_obsv.ready(), "IMU OBSERVER INIT FAILED");
     }
 
-    beginStep("Initialising Lidar Observer (P)");
-    if (!lidar.init()) {
-        endStep(false, "VL6180X INIT FAILED");
-    } else {
+    if (lidarOk) {
         lidar_obsv.setPrior(decltype(lidar_obsv)::PoseFunc::create<fusedPose>());
-        endStep(true, "");
     }
 
-    // Seeds every observer that holds an absolute pose, ImuObserver's heading
-    // included, so it has to run whatever the lidar did. It used to sit inside
-    // the branch above, which was harmless only while nothing on the pose side
-    // integrated anything.
-    sf.set(Pose{0, 0, 0});
+    // The wheels were just turned by hand. Odometry integrates deltas, so the
+    // marks have to move before the first tick or the whole hand-spin arrives
+    // as one tick of motion.
+    wheel_obsv.reset();
 
-    beginStep("Loading goal");
+    // The world frame is maze-aligned -- origin at the start cell, North at
+    // theta 0 -- so a start heading that is not North has to be seeded here.
+    // This used to be Pose{0, 0, 0}, which was correct only because the heading
+    // was compiled in as North.
+    sf.set(Pose{0, 0, directionToTheta(cfg.heading)});
 
-    // NOTE THAT X-AXIS IS FORWARDS: Y-AXIS IS LEFT!!!
+    beginStep("Configuring run");
+    endStep(runner.configure(cfg), "RUNNER REJECTED THE CONFIGURATION");
 
     runBegin();
 

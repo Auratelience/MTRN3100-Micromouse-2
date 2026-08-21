@@ -64,6 +64,17 @@ inline void drawSplash(OLEDDisplay& display) {
         0, 0, SPLASH_BITMAP, static_cast<int16_t>(SPLASH_WIDTH),
         static_cast<int16_t>(SPLASH_HEIGHT), SSD1306_WHITE
     );
+
+    // Bottom-left, over a filled rect: drawBitmap paints set bits only, so the
+    // logo may well have art underneath this and white-on-white would vanish.
+    const int16_t vh = OLED_TEXT_HEIGHT + 2;
+    const int16_t vw = static_cast<int16_t>(sizeof(FIRMWARE_VERSION)) * OLED_CHAR_WIDTH;
+    g.fillRect(0, OLED_HEIGHT - vh, vw, vh, SSD1306_BLACK);
+    g.setTextSize(OLED_TEXT_SIZE);
+    g.setTextColor(SSD1306_WHITE);
+    g.setCursor(2, OLED_HEIGHT - vh + 1);
+    g.print(FIRMWARE_VERSION);
+
     g.display();
 }
 
