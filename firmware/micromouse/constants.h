@@ -348,6 +348,53 @@ constexpr uint8_t OLED_TEXT_PANE_X = 66;
 // every row's digits line up whatever the label.
 constexpr uint8_t OLED_VALUE_COLUMN = 2;
 
+// FIRMWARE VERSION
+// Shown bottom-left on the splash. Bumped for the startup UI, which changes
+// what the robot expects of its operator -- worth being able to read off the
+// panel rather than off a git hash.
+constexpr char FIRMWARE_VERSION[] = "v2.0";
+
+// STARTUP UI
+constexpr uint16_t UI_SPLASH_MS    = 2000;
+constexpr uint16_t UI_COUNTDOWN_MS = 5000;
+
+// Encoder detent, in raw counts. ENC_CPR / 12 is twelve clicks per wheel
+// revolution, which spans the 2..16 size range in about 1.2 turns. Purely a
+// feel setting: raise it for a coarser dial, lower it for a finer one.
+constexpr int UI_ENCODER_DETENT_COUNTS = ENC_CPR / 12;
+
+// Side lidar as a momentary button, measured against a baseline rather than an
+// absolute distance. The sensors are mounted 35 mm off centre and a wall's
+// inner face is 84 mm from a cell centre, so a side sensor reads about 49 mm to
+// an adjacent wall -- there is not enough room between that and a hand for a
+// fixed threshold to be reliable.
+constexpr uint16_t UI_BUTTON_PRESS_DELTA_MM   = 25;
+constexpr uint16_t UI_BUTTON_RELEASE_DELTA_MM = 15;
+constexpr uint8_t UI_BUTTON_DEBOUNCE_SAMPLES  = 3;
+
+// A reading that sits past PRESS_DELTA this long without being taken as a press
+// is the world having changed -- the robot was moved, or a wall arrived -- and
+// becomes the new baseline. Without it, carrying the robot from the bench into
+// a corridor is a ~150 mm drop, six times PRESS_DELTA, and reads as a press.
+constexpr uint16_t UI_BUTTON_BASELINE_ADOPT_MS = 1200;
+
+// The countdown is the one screen during which the robot is being handled, so
+// both sensors are unreliable there in a way drift compensation reduces but
+// cannot eliminate: a decisive placement can still land inside the adopt
+// window. Both off by default, which also means the countdown draws no button
+// chrome -- self-documenting as "nothing is live, place the robot freely".
+constexpr bool UI_COUNTDOWN_SKIP_ENABLED = false;
+constexpr bool UI_COUNTDOWN_BACK_ENABLED = false;
+
+// Chrome geometry. Buttons are drawn centred on the edge pixel, so GFX clips
+// exactly half and a semicircle costs no more than a circle.
+constexpr uint16_t UI_BLINK_MS     = 200;
+constexpr int16_t UI_BUTTON_RADIUS = 6;
+constexpr int16_t UI_DIAL_RADIUS   = 7;
+constexpr int16_t UI_DIAL_LEFT_X   = 8;
+constexpr int16_t UI_DIAL_RIGHT_X  = 119;
+constexpr int16_t UI_DIAL_Y        = 55;
+
 // SENSOR FUSION
 constexpr size_t SENSOR_FUSION_MAX_VELOCITY_OBSERVERS = 4;
 constexpr size_t SENSOR_FUSION_MAX_POSE_OBSERVERS     = 2;

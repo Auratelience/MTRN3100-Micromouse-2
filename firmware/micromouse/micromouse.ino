@@ -14,6 +14,7 @@
 #include "oledDisplay.h"
 #include "oledSplash.h"
 #include "sensorFusion.h"
+#include "startupUI.h"
 #include "types.h"
 
 Motor<0> leftMotor(
