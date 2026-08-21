@@ -207,14 +207,18 @@ four lines at the top of `task43.h`. None of it is compiled in any more: every
 one of those four is chosen at boot through the startup wizard below, and lands
 in a `RunConfig` that `runner.configure()` takes at the end of `setup()`.
 
-Today's build: `./compile.sh` links at 111812 bytes of flash (42%) and 14228
-bytes of RAM (43%) on the Nano R4's 32 kB. `./compile.sh --debug` additionally
-builds the boot self-check and the two `loop()` diagnostics behind
-`MICROMOUSE_DEBUG` — see [`scripts/README.md`](../scripts/README.md) — and
-comes to 114284 bytes of flash (43%) and 14244 bytes of RAM (43%). Both figures
-have room to spare because deleting `task42.h` freed the ~10 kB
-`MotionPlanner` instance that used to share the binary with it, which is what
-makes the runtime maze-size capacity below comfortably affordable.
+Today's build: `./compile.sh` links at 111908 bytes of flash (42%) and 17300
+bytes of RAM (52%) on the Nano R4's 32 kB, leaving 15468 bytes for locals.
+`./compile.sh --debug` additionally builds the boot self-check and the two
+`loop()` diagnostics behind `MICROMOUSE_DEBUG` — see
+[`scripts/README.md`](../scripts/README.md) — and comes to 114372 bytes of
+flash (43%) and 17316 bytes of RAM (52%). Both figures have room to spare
+because deleting `task42.h` freed the ~10 kB `MotionPlanner` instance that used
+to share the binary with it, which is what makes the runtime maze-size capacity
+below comfortably affordable. Most of the static RAM that capacity does cost is
+`PSPlanner`'s pose sequence: `MAZE_INSTRUCTION_MAX_LEN` is derived from
+`MAZE_SIZE_MAX` so a route that snakes through every cell of the largest
+allowed maze still fits, at ~12 bytes a pose.
 
 ### The startup wizard
 

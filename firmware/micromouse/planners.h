@@ -268,8 +268,8 @@ class PSPlanner {
     }
 
     // By reference: the string is MAZE_INSTRUCTION_MAX_LEN bytes, and taking
-    // it by value put a 256 byte copy on the stack for every call -- once per
-    // cell during exploration.
+    // it by value put a copy of the whole capacity on the stack for every call
+    // -- once per cell during exploration.
     bool addInstructions(const etl::string<MAZE_INSTRUCTION_MAX_LEN>& instructions) {
         bool ok = true;
         for (const auto& c : instructions) {

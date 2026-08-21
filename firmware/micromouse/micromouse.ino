@@ -13,6 +13,7 @@
 #include "observers.h"
 #include "oledDisplay.h"
 #include "oledSplash.h"
+#include "selfCheck.h"
 #include "sensorFusion.h"
 #include "startupUI.h"
 #include "types.h"
@@ -132,6 +133,20 @@ void setup() {
     beginStep("Initialising Lidar");
     const bool lidarOk = lidar.init();
     endStep(lidarOk, "VL6180X INIT FAILED");
+
+#ifdef MICROMOUSE_DEBUG
+    // Before the wizard, not after it. This runs on the live mapper and leaves
+    // it configured for whichever grid it tried last, so the only safe place
+    // for it is upstream of the runner.configure() below -- run it any later
+    // and the self-check's grid is the one the robot drives, silently and at
+    // odds with the heading sf.set() seeded from the wizard.
+    //
+    // Serial is the only thing it needs, so it sits outside the dead-hardware
+    // fallback: a robot with no panel is exactly when a Serial-only check earns
+    // its place. Here rather than a few lines up so it spends the splash hold
+    // instead of adding to the boot time.
+    runSelfChecks(runner.mapper, wallMap);
+#endif
 
     while (millis() - splashShownMs < UI_SPLASH_MS) {}
 

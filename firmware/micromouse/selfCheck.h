@@ -9,8 +9,10 @@
 //
 // Runs on the live mapper rather than a private one. A second MazeMapper at the
 // capacity would be ~1.5 kB of RAM to test with, and it is not needed --
-// runStartupUI() reconfigures the mapper afterwards, so whatever this leaves
-// behind is overwritten before the run begins.
+// setup() calls this before the wizard and reconfigures the mapper with the
+// wizard's answers afterwards, so whatever this leaves behind is overwritten
+// before the run begins. Call it any later and the last grid it tried is the
+// grid the robot drives.
 
 #pragma once
 

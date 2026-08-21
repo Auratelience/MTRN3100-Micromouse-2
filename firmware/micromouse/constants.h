@@ -113,9 +113,25 @@ constexpr float MAZE_WALL_THICKNESS = 12.0f;
 constexpr float MAZE_POST_SIZE      = 12.0f;
 constexpr float MAZE_POST_RADIUS    = MAZE_POST_SIZE * 0.7071068f;
 
-// Longest instruction string ("frfllflr...") the InstructionRunner accepts,
-// excluding the null terminator.
-constexpr size_t MAZE_INSTRUCTION_MAX_LEN = 256;
+// Longest instruction string ("frfllflr...") a route can render to, excluding
+// the null terminator, and the pose capacity PSPlanner sizes its sequence to.
+//
+// Derived from the capacity rather than picked, so it cannot fall behind
+// MAZE_SIZE_MAX again. A maze is a spanning tree, so a shortest path can
+// snake through every one of the MAZE_SIZE_MAX^2 cells. Each step past the
+// first costs at most one turn plus an 'f': a shortest path never reverses,
+// since that would re-enter the cell it just left. The first step costs one
+// more, because the heading a route is rendered from is wherever exploration
+// left the robot and may be the reverse of the first move -- two turns, then
+// the 'f'. That is 2*cells - 1 characters. PSPlanner adds its setStart pose on
+// top of one pose per character, so 2*cells covers the string and the pose
+// array both.
+//
+// Sizing PSPlanner::instructions is what this costs: ~12 bytes per entry of
+// static RAM, so do not raise MAZE_SIZE_MAX without re-reading the free-RAM
+// figure ./compile.sh prints.
+constexpr size_t MAZE_INSTRUCTION_MAX_LEN =
+    2 * static_cast<size_t>(MAZE_SIZE_MAX) * static_cast<size_t>(MAZE_SIZE_MAX);
 
 
 // PID

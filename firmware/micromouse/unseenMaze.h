@@ -29,7 +29,6 @@
 #include "observers.h"
 #include "oledScreen.h"
 #include "planners.h"
-#include "selfCheck.h"
 #include "sensorFusion.h"
 #include "types.h"
 
@@ -41,8 +40,8 @@ using mazeMapper = MazeMapper<MAZE_SIZE_MAX>;
 
 PSPlanner psp(8.0f, 10.0f);
 
-// Unconfigured until runBegin() says otherwise: a mapper with no grid refuses
-// begin(), so there is no half-set-up run to trip over in between.
+// Unconfigured until setup() hands it the wizard's answers: a mapper with no
+// grid refuses begin(), so there is no half-set-up run to trip over in between.
 MazeRunner<MAZE_SIZE_MAX> runner(lidar, psp);
 
 MazeWallMap<MAZE_SIZE_MAX> wallMap(runner.mapper);
@@ -129,10 +128,6 @@ OLEDScreen<MazeWallMap<MAZE_SIZE_MAX>> screen(
 // latched in by the time this runs, so all that is left is to seed the
 // perimeter and fit the display to it.
 void runBegin() {
-#ifdef MICROMOUSE_DEBUG
-    runSelfChecks(runner.mapper, wallMap);
-#endif
-
     if (!runner.begin()) {
         Serial.println("\b\b\b [MAZE RUNNER REJECTED START OR GOAL]");
     } else {

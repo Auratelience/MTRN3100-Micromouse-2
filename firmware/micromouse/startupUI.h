@@ -57,6 +57,14 @@ class UIDial {
 };
 
 // One side lidar as a momentary button, against an adapting baseline.
+//
+// A press is near-side only -- a hand in front of a sensor can shorten the
+// range but never lengthen it -- while drift is two-sided, because the world
+// moving away is exactly as much a change of baseline as the world moving
+// closer. A one-sided adopt rule would be a ratchet: the baseline could follow
+// a hand down to whatever it was resting at and never climb back once the hand
+// left, and at MIN_DIST it could never move again, killing the button until
+// the next power cycle.
 class UIButton {
     public:
 
@@ -69,21 +77,33 @@ class UIButton {
 
     // True exactly once per press, on the edge.
     bool update(uint16_t reading, unsigned long nowMs) {
-        const bool near = (reading + UI_BUTTON_PRESS_DELTA_MM) < baseline;
+        // Ordered subtraction: the distance is unsigned, so taking it the
+        // wrong way round wraps to ~65000 rather than coming out negative.
+        const uint16_t away =
+            (reading > baseline) ? (reading - baseline) : (baseline - reading);
 
-        if (!near) {
+        const bool far  = away > UI_BUTTON_PRESS_DELTA_MM;
+        const bool near = far && reading < baseline;
+
+        if (!far) {
             below = 0;
+
+            // Within PRESS_DELTA of the baseline is the world as the button
+            // knows it, so the adopt window starts again from here.
+            driftSince = nowMs;
+
             // Back at the baseline is a release, and a release is what arms the
             // button. Starting unarmed is what stops a hand already in front of
             // a sensor at boot from firing the first screen.
-            if ((reading + UI_BUTTON_RELEASE_DELTA_MM) >= baseline) {
-                armed      = true;
-                driftSince = nowMs;
-            }
+            if (away <= UI_BUTTON_RELEASE_DELTA_MM) armed = true;
             return false;
         }
 
-        if (below < UI_BUTTON_DEBOUNCE_SAMPLES) ++below;
+        if (!near) {
+            below = 0;  // the far side is never a press, only ever drift
+        } else if (below < UI_BUTTON_DEBOUNCE_SAMPLES) {
+            ++below;
+        }
 
         if (armed && below >= UI_BUTTON_DEBOUNCE_SAMPLES) {
             armed      = false;  // needs a release before the next press
@@ -91,9 +111,10 @@ class UIButton {
             return true;
         }
 
-        // Near, but not consumed as a press -- either unarmed, or still
-        // debouncing. If it has been like this past the adopt window it is not
-        // a hand, it is the world: take it as the new baseline.
+        // Past PRESS_DELTA and not consumed as a press -- unarmed, still
+        // debouncing, or on the far side, where there is no press to consume.
+        // If it has been like this past the adopt window it is not a hand, it
+        // is the world: take it as the new baseline.
         if (nowMs - driftSince >= UI_BUTTON_BASELINE_ADOPT_MS) {
             baseline   = reading;
             below      = 0;
