@@ -65,10 +65,6 @@ class MazeRunner {
 
         const Cell start = mapper.startPosition();
 
-        croppedCells = sealCroppedCells();
-        reachableCells = static_cast<uint16_t>(MazeMapper<N>::MAX_CELLS - croppedCells);
-
-
         // The start cell's fourth side is the one thing the sensors cannot
         // settle from where they sit: observe() reads front, left and right, and
         // the robot never drove in through the back. So look at it -- see
@@ -88,26 +84,12 @@ class MazeRunner {
         return true;
     }
 
-    uint16_t croppedCells   = 0;
-    uint16_t reachableCells = MazeMapper<N>::MAX_CELLS;
-
-    static bool croppedCell(int x, int y) {
-        const int dx = etl::min<int>(x, static_cast<int>(N) - 1 - x);
-        const int dy = etl::min<int>(y, static_cast<int>(N) - 1 - y);
-        return (dx + dy) <= static_cast<int>(MAZE_CORNER_CROP);
-    }
-
-    uint16_t sealCroppedCells() {
-        uint16_t n = 0;
-        for (int8_t x = 0; x < static_cast<int8_t>(N); ++x) {
-            for (int8_t y = 0; y < static_cast<int8_t>(N); ++y) {
-                if (!croppedCell(x, y)) continue;
-                mapper.sealCell(Cell{x, y});
-                ++n;
-            }
-        }
-        return n;
-    }
+    // There is no corner crop. It seeded the competition deck's chamfered
+    // corners as sealed cells, which is a prior about a specific maze -- and an
+    // unseen maze of a size chosen at boot gives no grounds for it. Exploration
+    // discovers a walled-off corner by itself, at the cost of a few probing
+    // moves; exploreProgress() already documents that it under-reads when part
+    // of the maze is unreachable.
 
     Velocity update(const Pose& pose, float dt) {
         switch (runState) {
@@ -122,6 +104,13 @@ class MazeRunner {
 
     MazeMapper<N> mapper;
 
+    // The display asks these of the run, not of the mapper. They were reached
+    // through runner.mapper.* from the task header, which coupled the screen to
+    // the mapper's interface for three predicates.
+    bool homing() const { return mapper.homing(); }
+    bool faulted() const { return mapper.faulted(); }
+    float homeProgress() const { return mapper.homeProgress(); }
+
     // The discovered route in millimetres, one point per cell, empty until
     // Plan has run.
     etl::span<const Vec2D> route() const {
@@ -133,8 +122,9 @@ class MazeRunner {
     // reachable is not known until the sweep finishes. That is why it is a
     // meter and not a completion test -- doneExploring() is the test.
     float exploreProgress() const {
-        return static_cast<float>(mapper.visitedCount()) /
-               static_cast<float>(MazeMapper<N>::MAX_CELLS);
+        const uint16_t cells = mapper.cellCount();
+        if (cells == 0) return 0.0f;
+        return static_cast<float>(mapper.visitedCount()) / static_cast<float>(cells);
     }
 
     // One notch per pose in the planner's sequence, not per cell: addRaceRoute

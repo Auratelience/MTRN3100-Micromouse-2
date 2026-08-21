@@ -5,8 +5,6 @@
 #pragma once
 #include <Arduino.h>
 
-constexpr uint8_t MAZE_CORNER_CROP = 1;
-
 // MATH
 constexpr float PI_TWO  = PI / 2.0f;
 constexpr float PI_FOUR = PI / 4.0f;

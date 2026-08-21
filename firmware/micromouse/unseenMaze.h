@@ -85,10 +85,10 @@ using runnerState = MazeRunner<MAZE_SIZE_MAX>::State;
 const char* screenMode() {
     switch (runner.state()) {
         case runnerState::Init:    return "INIT";
-        case runnerState::Explore: return runner.mapper.homing() ? "HOME" : "EXPL";
+        case runnerState::Explore: return runner.homing() ? "HOME" : "EXPL";
         case runnerState::Plan:    return "PLAN";
         case runnerState::Race:    return "EXEC";
-        default:                   return runner.mapper.faulted() ? "FAULT" : "DONE";
+        default:                   return runner.faulted() ? "FAULT" : "DONE";
     }
 }
 
@@ -103,7 +103,7 @@ const char* screenMode() {
 //   else  poses driven of the poses in the route, one notch per instruction.
 OLEDMetric screenMetric() {
     if (runner.state() == runnerState::Explore) {
-        if (runner.mapper.homing()) return OLEDMetric{'P', runner.mapper.homeProgress()};
+        if (runner.homing()) return OLEDMetric{'P', runner.homeProgress()};
         return OLEDMetric{'E', runner.exploreProgress()};
     }
     return OLEDMetric{'P', runner.raceProgress()};
