@@ -20,6 +20,7 @@
 
 #include "constants.h"
 #include "mazeMapper.h"
+#include "mazeWallMap.h"
 #include "types.h"
 
 // Linter hidden as this is a header-only library
@@ -33,9 +34,13 @@ inline bool checkOne(const char* what, bool ok) {
     return ok;
 }
 
-// One grid size, end to end, on the live mapper.
-template <size_t N>
-bool selfCheckGrid(MazeMapper<N>& mapper, uint8_t n) {
+// One grid size, end to end, on the live mapper and the live wall map.
+//
+// The wall map is templated rather than named as MazeWallMap<N>: it is
+// constructed over the mapper in unseenMaze.h and taking it by deduction saves
+// this header from having to agree with that declaration.
+template <size_t N, typename WallMapT>
+bool selfCheckGrid(MazeMapper<N>& mapper, const WallMapT& wallMap, uint8_t n) {
     Serial.print(F("self-check n="));
     Serial.println(n);
 
@@ -64,18 +69,23 @@ bool selfCheckGrid(MazeMapper<N>& mapper, uint8_t n) {
     ok = checkOne("markWall accepted a cell outside n",
                   !mapper.markWall(Cell{static_cast<int8_t>(n), 0}, North)) && ok;
 
+    // The wall map's slot space is the selected grid, not the capacity.
+    const size_t expect = (static_cast<size_t>(n) + 1) * n + static_cast<size_t>(n) * (n + 1) +
+                          (static_cast<size_t>(n) + 1) * (n + 1);
+    ok = checkOne("wallMap.size() is not the slot count for n", wallMap.size() == expect) && ok;
+
     return ok;
 }
 
-template <size_t N>
-bool runSelfChecks(MazeMapper<N>& mapper) {
+template <size_t N, typename WallMapT>
+bool runSelfChecks(MazeMapper<N>& mapper, const WallMapT& wallMap) {
     // A plain array, not an initializer_list: nothing else in this tree pulls
     // <initializer_list> in and a debug-only header is a poor place to start.
     const uint8_t sizes[] = {2, 5, 9, MAZE_SIZE_MAX};
 
     bool ok = true;
     for (uint8_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
-        ok = selfCheckGrid(mapper, sizes[i]) && ok;
+        ok = selfCheckGrid(mapper, wallMap, sizes[i]) && ok;
     }
 
     ok = checkOne("configure accepted a size below MAZE_SIZE_MIN",

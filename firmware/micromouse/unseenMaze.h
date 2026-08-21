@@ -127,7 +127,7 @@ OLEDScreen<MazeWallMap<MAZE_SIZE_MAX>> screen(
 // Called from setup(), after the shared bring-up.
 void runBegin() {
 #ifdef MICROMOUSE_DEBUG
-    runSelfChecks(runner.mapper);
+    runSelfChecks(runner.mapper, wallMap);
 #endif
 
     // TEMPORARY -- replaced by runStartupUI() in the bring-up reorder, Task 10.
