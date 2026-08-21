@@ -154,8 +154,8 @@ velocity forward) and blends two kinds of source into it.
 
 *Pose sources* produce a correction that is folded into dead reckoning at the
 gain handed to `SensorFusion` — `0.1` in `unseenMaze.h`, against a
-`FusionWeights::PoseCorrectionGain` default of `0.2` — per tick, so a fix nudges
-rather than teleports:
+`FusionWeights::PositionCorrectionGain` default of `0.2` — per tick, so a fix
+nudges rather than teleports:
 
 * `FrontLidarObserver` — front range as an x measurement. Nothing wires it
   today; the TASK 3.2 exercise that used to drive it is gone from the sketch,
@@ -375,7 +375,11 @@ to how the splash is *drawn* should touch.
 * **Turn radius comes in bands.** Up to 26 mm, or 73–182 mm, and nothing
   between — narrower than the axle-centred arithmetic suggests, because the
   body rides ahead of the axle and swings wider through every turn. The obvious
-  "slightly tighter than a cell" 70 mm cannot clear a pivot post.
+  "slightly tighter than a cell" 70 mm cannot clear a pivot post. The bands
+  were computed against a 25 mm axle offset, by the now-deleted offline
+  planner, not the firmware's own `AXLE_DIST_FROM_CENTRE` of `20` mm — a 5 mm
+  margin in the conservative direction, but the numbers above are not an exact
+  fit to what actually ships.
 * **`Serial` in the loop costs milliseconds.** `loop()` is kept free of it;
   `setup()` prints freely because nothing is timing-critical yet. Add a print to
   the loop only while you are actually debugging, and take it out again.

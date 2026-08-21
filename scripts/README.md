@@ -8,7 +8,7 @@ care about the caller's cwd. The two `.sh` are zsh; `export_splash.py` is a
 | script | what it does |
 | --- | --- |
 | `build.sh` | compiles an Arduino sketch into `build/` beside it |
-| `build_maze.sh` | maze photo in, overlay on screen and `maze_map.h`/`maze_path.h` installed into the firmware |
+| `build_maze.sh` | maze photo in, overlay on screen and `maze_map.h`/`maze_path.h` installed into the firmware — inert, see below |
 | `export_splash.py` | splash art in, `splash_screen.h` installed into the firmware |
 
 ```sh
@@ -16,7 +16,7 @@ care about the caller's cwd. The two `.sh` are zsh; `export_splash.py` is a
 ./scripts/build.sh --flash            # ...and upload it, ~11s more
 ./scripts/build.sh --db               # compile_commands.json only, for clangd
 ./scripts/build.sh --debug            # -DMICROMOUSE_DEBUG=1: boot self-check + loop diagnostics
-./scripts/build_maze.sh 5 --from 1,1 --to 3,3
+./scripts/build_maze.sh 5 --from 1,1 --to 3,3   # inert, see below
 ./scripts/export_splash.py            # re-export the OLED splash bitmap
 ```
 

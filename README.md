@@ -1,18 +1,18 @@
 # MTRN3100 Micromouse
 
-A micromouse that can either be told the maze or made to explore it. Told: an
-overhead photo of the deck goes in, a collision-checked path in the firmware's
-own `Segment` alphabet comes out, and the robot drives it while localising
-against a map exported from the same photo. Explore: the robot is given a start
-cell and a goal, maps the maze with its three range sensors, then plans a route
-over what it found and races it.
+A micromouse firmware for exploring an unseen maze. Given a start cell, a start
+heading and a goal — all chosen at boot through an on-panel startup wizard —
+the robot maps the maze with its three range sensors, plans a route over what
+it found, and races it. Earlier revisions could also be told the maze from an
+overhead photo, planned offline and driven while localising against a map
+exported from that photo; that whole pipeline has since been deleted.
 
 Four directories, each with its own README:
 
 | directory | what it is | language |
 | --- | --- | --- |
 | [`firmware/`](firmware/) | the robot. `micromouse.ino` plus the header-only libraries it is built from | C++17, Arduino |
-| [`scripts/`](scripts/) | every entry point: `build.sh` compiles the sketch, `build_maze.sh` runs the photo-to-headers pipeline, `export_splash.py` turns the splash art into a bitmap | zsh, Python |
+| [`scripts/`](scripts/) | every entry point: `build.sh` compiles the sketch, `build_maze.sh` ran the photo-to-headers pipeline (inert, see below), `export_splash.py` turns the splash art into a bitmap | zsh, Python |
 | [`hardware/`](hardware/) | CAD for the printed chassis and the maze wall panels, and the OLED splash art | Bambu Studio, Grasshopper, Aseprite |
 | [`notes/`](notes/) | course handouts and working notes. Nothing here is read by any code | PDF, JPEG |
 
