@@ -15,6 +15,7 @@ care about the caller's cwd. The two `.sh` are zsh; `export_splash.py` is a
 ./scripts/build.sh                    # micromouse, the default target, ~15s
 ./scripts/build.sh --flash            # ...and upload it, ~11s more
 ./scripts/build.sh --db               # compile_commands.json only, for clangd
+./scripts/build.sh --debug            # -DMICROMOUSE_DEBUG=1: boot self-check + loop diagnostics
 ./scripts/build_maze.sh 5 --from 1,1 --to 3,3
 ./scripts/export_splash.py            # re-export the OLED splash bitmap
 ```
@@ -39,6 +40,26 @@ something `arduino-cli` gets to be confused by.
 
 Everything that is not one of the script's own options is passed straight
 through to `arduino-cli compile` — never to the upload step.
+
+### Debug builds
+
+`--debug` appends `--build-property compiler.cpp.extra_flags=-DMICROMOUSE_DEBUG=1`
+to the `arduino-cli compile` invocation, which turns on the boot self-check for
+the runtime maze grid and the two `DIAGNOSTIC` reports already written into
+`loop()` — the IMU read-failure count and the FIFO samples-per-cycle report.
+Both are off by default because a periodic `Serial` write from inside the
+control loop costs it milliseconds, which is exactly the kind of stall those
+reports exist to catch; `--debug` is how you accept that cost on purpose, for a
+bench session.
+
+The build directory is wiped at the start of every run regardless of this flag
+(see below), so there is no stale-define hazard in switching between a plain
+build and a `--debug` one.
+
+One caveat worth knowing if you also use `--db` with clangd: `--db` alone
+generates `compile_commands.json` *without* `MICROMOUSE_DEBUG` defined, so
+debug-only code reads as inactive in the editor unless `--debug` is passed
+alongside it — `./scripts/build.sh --db --debug`.
 
 ### Flashing
 
@@ -73,17 +94,19 @@ clangd does not reindex every time.
 
 ## build_maze.sh
 
-The wrapper exists to enforce one coupling: `maze_demo.py` and `export_map.py`
-must be given the *same* `--from`/`--theta0`/`--r`, because the exported map and
-the exported path are both re-origined onto that start pose. Give them different
-ones and the robot localises against a map offset from the path it is driving.
+The wrapper existed to enforce one coupling: `maze_demo.py` and `export_map.py`
+had to be given the *same* `--from`/`--theta0`/`--r`, because the exported map
+and the exported path were both re-origined onto that start pose. Give them
+different ones and the robot localises against a map offset from the path it
+is driving.
 
-Although the script lives here, everything it reads and writes belongs to
-[`path-planning/`](../path-planning/): `mazes/`, the `uv` project it runs under,
-and the per-run `map_<stem>.h`/`path_<stem>.h`/overlay it leaves behind. That is
-deliberate — `.gitignore` covers those outputs as `path-planning/*.h`, a rule
-that does not reach into `scripts/`. The installed headers go to
-`firmware/micromouse/`, each keeping the previous copy as `.bak`.
+Although the script still lives here, everything it read and wrote belonged to
+the offline planning project beside it — `mazes/`, the `uv` environment it ran
+under, and the per-run `map_<stem>.h`/`path_<stem>.h`/overlay it left behind —
+and that project has been deleted along with the rest of the offline pipeline.
+`build_maze.sh` has nothing left to invoke; the header pair it last installed,
+`maze_map.h`/`maze_path.h` in `firmware/micromouse/`, is what remains, each
+still keeping the previous copy as `.bak`.
 
 ## export_splash.py
 
@@ -93,7 +116,7 @@ a `constexpr uint8_t[1024]` in the layout `Adafruit_GFX::drawBitmap` reads.
 `oledSplash.h` blits it once from `setup()`, so it holds the panel through
 bring-up until the first `OLEDScreen` frame overwrites it.
 
-Unlike `build_maze.sh` this needs nothing from `path-planning/`: it imports no
+Unlike `build_maze.sh`, this needs nothing from another project: it imports no
 local modules and declares `pillow` in a PEP 723 block, so `uv run --script`
 resolves it on its own. `build.sh --flash` runs it that way.
 
