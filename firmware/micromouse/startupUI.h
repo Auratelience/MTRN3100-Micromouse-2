@@ -166,4 +166,222 @@ inline void drawChrome(
     if (chrome.rightDial) drawDial(g, UI_DIAL_RIGHT_X, rightAngle);
 }
 
+// Direction is not an integer dial: the enum is {North = 0, West = 1,
+// South = 2, East = -1}, so incrementing it does not walk the compass. This is
+// the clockwise order the heading screen indexes.
+constexpr Direction UI_HEADING_ORDER[4] = {North, East, South, West};
+
+inline const char* headingName(Direction d) {
+    switch (d) {
+        case North: return "N";
+        case East:  return "E";
+        case South: return "S";
+        default:    return d == West ? "W" : "?";
+    }
+}
+
+// MazeMapper::sameCell is a private static member, so it is not reachable from
+// here and this is not worth widening the mapper's interface for.
+inline bool sameCellUI(const Cell& a, const Cell& b) { return a.x == b.x && a.y == b.y; }
+
+inline int clampInt(int v, int lo, int hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+// The wizard's screens, in order.
+enum class UIStep : uint8_t { Size, Start, Heading, Goal, Countdown, Done };
+
+inline RunConfig runStartupUI(
+    OLEDDisplay& display, LIDAR& lidar, BaseMotor& left, BaseMotor& right,
+    I2CRepairer& i2c
+) {
+    RunConfig cfg{MAZE_SIZE_MAX, Cell{0, 0}, North, Cell{0, 0}};
+    uint8_t headingIndex = 0;
+
+    UIDial leftDial;
+    UIDial rightDial;
+    UIButton backButton;
+    UIButton nextButton;
+
+    lidar.update();
+    const unsigned long t0 = millis();
+    backButton.begin(lidar.getReading(LIDAR::Left), t0);
+    nextButton.begin(lidar.getReading(LIDAR::Right), t0);
+    leftDial.begin(left.count());
+    rightDial.begin(right.count());
+
+    UIStep step                 = UIStep::Size;
+    UIStep shownStep             = UIStep::Size;
+    unsigned long stepEnteredMs = t0;
+    unsigned long leftBlinkMs   = 0;
+    unsigned long rightBlinkMs  = 0;
+
+    while (step != UIStep::Done) {
+        i2c.update();
+        lidar.update();
+
+        const unsigned long now = millis();
+        const long lc           = left.count();
+        const long rc           = right.count();
+
+        // Chrome for this screen, which is also the gate on the inputs: a
+        // button that is not drawn is not read, so the two cannot disagree.
+        UIChrome chrome{false, false, false, false};
+        switch (step) {
+            case UIStep::Size:
+                chrome = UIChrome{false, true, false, true};
+                break;
+            case UIStep::Start:
+            case UIStep::Goal:
+                chrome = UIChrome{true, true, true, true};
+                break;
+            case UIStep::Heading:
+                chrome = UIChrome{true, true, false, true};
+                break;
+            case UIStep::Countdown:
+                chrome = UIChrome{
+                    UI_COUNTDOWN_BACK_ENABLED, UI_COUNTDOWN_SKIP_ENABLED, false, false
+                };
+                break;
+            default: break;
+        }
+
+        // Read the dials every frame regardless, so the marks track the wheels
+        // and a screen that does not use a dial cannot bank detents for the
+        // next one that does.
+        const int dl = leftDial.take(lc);
+        const int dr = rightDial.take(rc);
+
+        const bool back =
+            backButton.update(lidar.getReading(LIDAR::Left), now) && chrome.leftButton;
+        const bool next =
+            nextButton.update(lidar.getReading(LIDAR::Right), now) && chrome.rightButton;
+
+        if (back) leftBlinkMs = now;
+        if (next) rightBlinkMs = now;
+
+        const int last = static_cast<int>(cfg.size) - 1;
+
+        switch (step) {
+            case UIStep::Size:
+                if (dr != 0) {
+                    cfg.size = static_cast<uint8_t>(
+                        clampInt(static_cast<int>(cfg.size) + dr, MAZE_SIZE_MIN, MAZE_SIZE_MAX)
+                    );
+                    // A smaller maze can strand a cell chosen earlier.
+                    cfg.start.x = static_cast<int8_t>(clampInt(cfg.start.x, 0, cfg.size - 1));
+                    cfg.start.y = static_cast<int8_t>(clampInt(cfg.start.y, 0, cfg.size - 1));
+                    cfg.goal.x  = static_cast<int8_t>(clampInt(cfg.goal.x, 0, cfg.size - 1));
+                    cfg.goal.y  = static_cast<int8_t>(clampInt(cfg.goal.y, 0, cfg.size - 1));
+                }
+                if (next) step = UIStep::Start;
+                break;
+
+            case UIStep::Start:
+                if (dl != 0) cfg.start.x = static_cast<int8_t>(clampInt(cfg.start.x + dl, 0, last));
+                if (dr != 0) cfg.start.y = static_cast<int8_t>(clampInt(cfg.start.y + dr, 0, last));
+                if (next) step = UIStep::Heading;
+                if (back) step = UIStep::Size;
+                break;
+
+            case UIStep::Heading:
+                if (dr != 0) {
+                    headingIndex = static_cast<uint8_t>(((headingIndex + dr) % 4 + 4) % 4);
+                    cfg.heading  = UI_HEADING_ORDER[headingIndex];
+                }
+                if (next) step = UIStep::Goal;
+                if (back) step = UIStep::Start;
+                break;
+
+            case UIStep::Goal:
+                if (dl != 0) cfg.goal.x = static_cast<int8_t>(clampInt(cfg.goal.x + dl, 0, last));
+                if (dr != 0) cfg.goal.y = static_cast<int8_t>(clampInt(cfg.goal.y + dr, 0, last));
+                if (back) step = UIStep::Heading;
+                if (next && !sameCellUI(cfg.start, cfg.goal)) step = UIStep::Countdown;
+                break;
+
+            case UIStep::Countdown:
+                if (back) step = UIStep::Goal;
+                if (next || now - stepEnteredMs >= UI_COUNTDOWN_MS) step = UIStep::Done;
+                break;
+
+            default: break;
+        }
+
+        if (step == UIStep::Done) break;
+
+        // Entering a screen restarts its clock, which is what the countdown
+        // measures against. A plain local, not a function-local static: a
+        // static would survive into a second call and start the countdown
+        // already expired.
+        if (step != shownStep) {
+            shownStep     = step;
+            stepEnteredMs = now;
+        }
+
+        if (!display.due()) continue;
+
+        Adafruit_SSD1306& g = display.gfx();
+        g.clearDisplay();
+        g.setTextSize(OLED_TEXT_SIZE);
+        g.setTextColor(SSD1306_WHITE);
+
+        switch (step) {
+            case UIStep::Size:
+                g.setCursor(12, 4);
+                g.print(F("MAZE SIZE"));
+                g.setCursor(12, 20);
+                g.print(cfg.size);
+                g.print(F(" x "));
+                g.print(cfg.size);
+                break;
+            case UIStep::Start:
+                g.setCursor(12, 4);
+                g.print(F("START CELL"));
+                g.setCursor(12, 20);
+                g.print(F("X:"));
+                g.print(cfg.start.x);
+                g.print(F("  Y:"));
+                g.print(cfg.start.y);
+                break;
+            case UIStep::Heading:
+                g.setCursor(12, 4);
+                g.print(F("START HEADING"));
+                g.setCursor(12, 20);
+                g.print(headingName(cfg.heading));
+                break;
+            case UIStep::Goal:
+                g.setCursor(12, 4);
+                g.print(F("GOAL CELL"));
+                g.setCursor(12, 20);
+                g.print(F("X:"));
+                g.print(cfg.goal.x);
+                g.print(F("  Y:"));
+                g.print(cfg.goal.y);
+                if (sameCellUI(cfg.start, cfg.goal)) {
+                    g.setCursor(12, 32);
+                    g.print(F("= START"));
+                }
+                break;
+            case UIStep::Countdown:
+                g.setCursor(12, 4);
+                g.print(F("STARTING IN"));
+                g.setCursor(12, 20);
+                g.print((UI_COUNTDOWN_MS - (now - stepEnteredMs) + 999) / 1000);
+                break;
+            default: break;
+        }
+
+        drawChrome(
+            display, chrome, leftDial.angle(lc), rightDial.angle(rc),
+            now - leftBlinkMs < UI_BLINK_MS, now - rightBlinkMs < UI_BLINK_MS
+        );
+        g.display();
+    }
+
+    return cfg;
+}
+
 // NOLINTEND(misc-definitions-in-headers)
