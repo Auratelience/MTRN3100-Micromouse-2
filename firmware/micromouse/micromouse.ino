@@ -135,9 +135,21 @@ void setup() {
 
     while (millis() - splashShownMs < UI_SPLASH_MS) {}
 
-    // Blocking. The control loop does not exist yet, so there is nothing to
-    // starve, and the operator takes as long as they take.
-    const RunConfig cfg = runStartupUI(display, lidar, leftMotor, rightMotor, i2cRepairer);
+    // The wizard's only way out is its side lidars, read as buttons, and its
+    // only output is the panel -- so with either dead there is no gesture
+    // that advances a screen and nothing to show if there were, and setup()
+    // would block here forever rather than ever reaching loop(). Falling
+    // back to the pre-wizard default trades a configuration the operator
+    // cannot change for a robot that still starts.
+    RunConfig cfg{9, Cell{1, 1}, North, Cell{5, 5}};
+    if (lidarOk && oledOk) {
+        // Blocking. The control loop does not exist yet, so there is nothing to
+        // starve, and the operator takes as long as they take.
+        cfg = runStartupUI(display, lidar, leftMotor, rightMotor, i2cRepairer);
+    } else {
+        beginStep("Startup wizard");
+        endStep(false, "SKIPPED (dead LIDAR or OLED) -- using default configuration");
+    }
 
     // After the wizard, not before it: this is a 3 s measurement of the gyro's
     // zero-rate output and it wants the robot settled, which it is not while
