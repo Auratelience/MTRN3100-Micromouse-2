@@ -110,3 +110,60 @@ class UIButton {
     uint8_t below            = 0;
     bool armed               = false;
 };
+
+// Linter hidden as this is a header-only library
+// NOLINTBEGIN(misc-definitions-in-headers)
+
+// Which inputs are live on the current screen.
+//
+// Drawn every frame, so the panel always answers "what can I do here?" without
+// the operator having to remember the sequence. Screen 1 sets leftButton false
+// because back is a no-op there: the chrome and the behaviour agree, which is
+// the whole point of drawing it.
+struct UIChrome {
+    bool leftButton;
+    bool rightButton;
+    bool leftDial;
+    bool rightDial;
+};
+
+// A wheel, as a circle with one spoke.
+inline void drawDial(Adafruit_SSD1306& g, int16_t cx, float angle) {
+    g.drawCircle(cx, UI_DIAL_Y, UI_DIAL_RADIUS, SSD1306_WHITE);
+
+    // World angle to screen: the spoke points up at zero and turns the way the
+    // wheel does. Screen y grows downward, hence the negated cosine.
+    const int16_t ex = cx + static_cast<int16_t>(lroundf(UI_DIAL_RADIUS * sinf(angle)));
+    const int16_t ey =
+        UI_DIAL_Y - static_cast<int16_t>(lroundf(UI_DIAL_RADIUS * cosf(angle)));
+    g.drawLine(cx, UI_DIAL_Y, ex, ey, SSD1306_WHITE);
+}
+
+// A lidar button, as a semicircle on its edge.
+//
+// fillCircle centred on the edge pixel: GFX clips the off-panel half, so this
+// is a semicircle bulging inward at no cost over a normal circle. A press
+// flashes it to an outline for UI_BLINK_MS.
+inline void drawButton(Adafruit_SSD1306& g, int16_t x, bool blink) {
+    if (blink) {
+        g.drawCircle(x, OLED_HEIGHT / 2, UI_BUTTON_RADIUS, SSD1306_WHITE);
+    } else {
+        g.fillCircle(x, OLED_HEIGHT / 2, UI_BUTTON_RADIUS, SSD1306_WHITE);
+    }
+}
+
+// Chrome occupies x < 8, x > 119 and y > 46, leaving a content region of 18
+// characters by 5 lines at OLED_CHAR_WIDTH / OLED_TEXT_HEIGHT.
+inline void drawChrome(
+    OLEDDisplay& display, const UIChrome& chrome, float leftAngle, float rightAngle,
+    bool leftBlink, bool rightBlink
+) {
+    Adafruit_SSD1306& g = display.gfx();
+
+    if (chrome.leftButton) drawButton(g, 0, leftBlink);
+    if (chrome.rightButton) drawButton(g, OLED_WIDTH - 1, rightBlink);
+    if (chrome.leftDial) drawDial(g, UI_DIAL_LEFT_X, leftAngle);
+    if (chrome.rightDial) drawDial(g, UI_DIAL_RIGHT_X, rightAngle);
+}
+
+// NOLINTEND(misc-definitions-in-headers)
